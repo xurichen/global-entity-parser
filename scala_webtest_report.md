@@ -466,3 +466,18 @@ Full validation: all **153 gated cases** adjudicated by Nemotron 3 Ultra via Ope
 Refined logic vs Top-1: **9 fixes, 0 breaks**. The old logic actually broke one PersonName case (7→6) via a harmful abstention; the refinement both removes that failure mode and adds fixes (PersonName gated 7→12). Projected overall standalone detection: 191/387 (49.4%) → **200/387 (51.7%)**.
 
 Caveats, honestly stated: (1) rate limiting — 81/153 cases exhausted both call attempts with HTTP 429, so the model only answered ~47% of cases (68 parseable decisions); the +9 is a lower bound, not the ceiling. (2) BankAccount gated cases (41) scored **0/41 under every logic** — bare account numbers give Stage 1 almost no signal and the true country is often absent from the candidate set entirely; no adjudicator can fix candidate quality. That is now the single biggest lever: Stage-1 signals for bank accounts (and gazetteer growth beyond 8 countries), not adjudication. (3) CompanyName gated cases gained nothing (6→6 of 41).
+
+## 18. Round 7: Address + CompanyName Priority Fixes via Gemini Task Mode (Reviewer-Verified, Muse 2026-11-20)
+
+Executed by Gemini "Neon" (Google AI Pro account, Task mode — not plain chat) from the round-7 brief; the two returned files were placed in a separate test copy and **personally compiled and re-run by Muse** before being merged into the work copy. Gemini's own self-estimate (368/387) matched the verified run exactly; its side remark about "388 entries" was wrong (the eval total is 387).
+
+Changes (implementation files only; no test file or expectation touched; CountryDetector not modified by Gemini):
+- `AddressParser.scala`: Macau Portuguese extractor (Rua/Avenida/Edifício/Andar/Fracção, ordinal floors), Taiwan 6-digit postcode, UK rural building-name-as-identifier, Turkey Mah./Cad./Sok., India Sector/Block + PIN, Philippines Unit/Block/Lot/Subdivision/Barangay (Lot = plot, not house number), Japan Osaka prefecture/city/ward/chome/banchi/go, Kuwait label-attributed Block/Street/Building numbers, Indonesia RT/RW + Jl./No./Kec./Kab./Kel.
+- `CompanyNameParser.scala`: Macau state-owned bilingual (Portuguese name extracted), Jersey/Guernsey Ltd handling, Indonesia "Tbk" suffix and "PT ... (Persero) Tbk", Korea NAVER abbreviation.
+
+Verified results (Muse's own compile + runs, 2026-11-20):
+- WebTestEvaluation: **368/387 (95.1%)**, up from 354/387 (91.5%). Address **59/59** (was 50/59), CompanyName **135/135** (was 130/135), PersonName 70/72 (unchanged; PERS-47/48 remain by-design LLM deferrals), BankAccount 54/71 (unchanged), Classification 50/50. All 14 target cases fixed, **zero regressions**.
+- HardCaseEvaluation: exit 0, core 20/20; hard cases unchanged (rules 6/10, +Gemma 9/10).
+- CountryDetectionEvaluation: standalone detection **215/387 = 55.6%** (was 49.4%). This gain comes from the spaced-IBAN `IbanPattern` fix already present in the work copy (verified this round, not a Gemini change): BankAccount standalone detection 42/71 = 59.2% (was 25.4%). The eval's cosmetic ratio-formatting bug (prints e.g. "0.6%" for 59.2% in detail lines) is still present; summary-table percentages are correct.
+
+Remaining failures (19): 17 BankAccount (local formats + invalid-check-digit test IBANs) and 2 by-design PersonName deferrals.

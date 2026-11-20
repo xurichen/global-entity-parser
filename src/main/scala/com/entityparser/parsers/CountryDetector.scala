@@ -91,7 +91,11 @@ object CountryDetector {
   private val IeAnchor    = """(?i)(ireland|\bIE\b|\bDUBLIN\b)""".r
 
   // --- Hard identifier patterns ---
-  private val IbanPattern = """\b([A-Z]{2})\d{2}[A-Z0-9]{10,30}\b""".r
+  // Matches both compact IBANs (DE89370400440532013000) and the standard
+  // printed spaced form in groups of 4 (DE89 3704 0044 0532 0130 00).
+  // Previously the spaced form never matched, so the IBAN country code
+  // (a hard identifier) was missed for every spaced IBAN.
+  private val IbanPattern = """\b([A-Z]{2})\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?\b""".r
   private val BicPattern  = """\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?\b""".r
   private val PhonePattern = """\+(\d{1,3})\s*\d""".r
   private val CctldPattern = """\b[a-z0-9-]+\.([a-z]{2})\b""".r
@@ -285,11 +289,16 @@ object CountryDetector {
     }
 
     // 2. Hard identifiers (IBAN, BIC, phone, ccTLD) - weight 1.0 (but handled specially)
-    // IBAN country code
-    IbanPattern.findAllMatchIn(s).foreach { m =>
+    // IBAN country code. Spans are kept so later, weaker signals (e.g. postcode
+    // formats) are not extracted from inside an IBAN: a spaced IBAN's digit
+    // groups would otherwise each match bare 4-digit postcode patterns and
+    // outvote the hard identifier.
+    val ibanMatches = IbanPattern.findAllMatchIn(s).toList
+    ibanMatches.foreach { m =>
       val cc = m.group(1).toUpperCase(java.util.Locale.ROOT)
       addEvidence(cc, CountryEvidence.HardIdentifier(cc, "IBAN", m.group(0)))
     }
+    val ibanSpans = ibanMatches.map(m => (m.start, m.end))
 
     // BIC country code (positions 5-6)
     BicPattern.findAllMatchIn(s).foreach { m =>
@@ -359,9 +368,11 @@ object CountryDetector {
       }
     }
 
-    // 4. Postcode format
+    // 4. Postcode format — skip matches inside an IBAN span (see step 2).
     postcodePatterns.foreach { case (cc, regex) =>
-      regex.findAllMatchIn(s).foreach { m =>
+      regex.findAllMatchIn(s).filterNot { m =>
+        ibanSpans.exists { case (start, end) => m.start < end && start < m.end }
+      }.foreach { m =>
         addEvidence(cc, CountryEvidence.PostcodeFormat(cc, m.group(0)))
       }
     }

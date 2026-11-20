@@ -77,7 +77,7 @@ final class AddressParser(
   private val UkRegexBasic =
     """^(\d+[A-Za-z]?)\s+([^,]+?),\s*([^,]+?),\s*([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})(?:,\s*(?:UK|United Kingdom|GB))?$""".r
   private val UkRegexWithDistrict =
-    """^(?:(?:Flat|Floor|Fl|Apt|Suite|Unit|#)\s*([^,]+?),\s*)?([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})(?:,\s*(?:UK|United Kingdom|GB))?$""".r
+    """^(?:Flat|Floor|Fl|Apt|Suite|Unit|#)\s*([^,]+?),\s*([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})(?:,\s*(?:UK|United Kingdom|GB))?$""".r
   private val UkRegexBuildingOnly =
     """^([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})(?:,\s*(?:UK|United Kingdom|GB))?$""".r
   private val UkRegexBuildingOnlyNoHouse =
@@ -150,9 +150,9 @@ final class AddressParser(
   // Note: º (U+00BA, No) and ° (U+00B0, So) are ordinal/degree signs; Portuguese uses "5.º" with period
   // Use permissive pattern for ordinal indicator (º, ª, °, ., superscript)
   private val MoRegex =
-    """^([^,]+?),\s*n[ºª°.]?\s*(\d+[A-Za-z]?),\s*([^,]+?),\s*\d+[ºª°.]?\s*(andar|floor|樓),\s*(Macau|澳門)$""".r
+    """^([^,]+?),\s*n\.?\s*[ºª°oO]?\.?\s*(\d+[A-Za-z]?),\s*([^,]+?),\s*\d+\.?\s*[ºª°oOaA]?\.?\s*(andar|floor|樓),\s*(Macau|澳門)$""".r
   private val MoRegexAlt =
-    """^([^,]+?),\s*n[ºª°\.]\s*(\d+[A-Za-z]?),\s*([^,]+?),\s*\d+[ºª°\.]\s*(andar|floor|樓),\s*(Macau|澳門)$""".r
+    """^([^,]+?),\s*n\.?\s*[ºª°oO]\.?\s*(\d+[A-Za-z]?),\s*([^,]+?),\s*\d+\.?\s*[ºª°oOaA]\.?\s*(andar|floor|樓),\s*(Macau|澳門)$""".r
   private val MoRegexChinese =
     """(澳門)([\u4E00-\u9FFF]+?(?:區|填海區))?([\u4E00-\u9FFF]+?(?:大道|大街|路|街|馬路))(\d+[A-Za-z]?號)([\u4E00-\u9FFF]+?(?:中心|大廈|樓))(\d+[樓層])""".r
 
@@ -161,7 +161,7 @@ final class AddressParser(
   private val TwRegexChinese =
     """^(\d{3,5})?([\u4E00-\u9FFF]+?(?:市|縣))([\u4E00-\u9FFF]+?(?:區|鄉|鎮|市))([\u4E00-\u9FFFA-Za-z0-9]+?(?:路|街|大道|大街))(一段|二段|三段|四段|五段)?(\d+[A-Za-z]?號)?""".r
   private val TwRegexEnglish =
-    """^(?:No\.?\s*(\d+[A-Za-z]?),\s*)?(?:Sec\.?\s*(\d+),\s*)?([^,]+?(?:Rd\.?|Road|St\.?|Street|Ave\.?|Avenue|Blvd\.?|Boulevard|Dr\.?|Drive|Ln\.?|Lane|E\.|W\.|N\.|S\.)),\s*([^,]+?(?:Dist\.?|District)),\s*([^,]+?(?:City|County)),\s*(\d{5,6})(?:,\s*(?:Taiwan|TW))?$""".r
+    """^(?:No\.?\s*(\d+[A-Za-z]?),\s*)?(?:Sec\.?\s*(\d+),\s*)?([^,]+?(?:Rd\.?|Road|St\.?|Street|Ave\.?|Avenue|Blvd\.?|Boulevard|Dr\.?|Drive|Ln\.?|Lane|E\.|W\.|N\.|S\.)),\s*([^,]+?(?:Dist\.?|District)),\s*([^,]+?(?:City|County))(?:\s*,\s*|\s+)(\d{3,6})(?:,\s*(?:Taiwan|TW))?$""".r
 
   // Singapore: 1 Raffles Place, #45-01, One Raffles Place, Singapore 048616
   // Also: Blk 123 Ang Mo Kio Ave 3, #01-456, Singapore 560123
@@ -210,9 +210,9 @@ final class AddressParser(
 
   // Turkey (TR): Levent Mahallesi, Buyukdere Caddesi No: 189, 34394 Sisli/Istanbul, Turkiye
   private val TrRegex =
-    """^([^,]+?),\s*([^,]+?)\s+No\s*:\s*(\d+[A-Za-z]?),\s*(\d{5})\s+[^/]+/([^,]+?)(?:,\s*(?:Turkiye|Turkey|TR))?$""".r
+    """^([^,]+?),\s*([^,]+?)\s+No\s*:\s*(\d+[A-Za-z]?),\s*(\d{5})\s+[^/]+/([^,]+?)(?:,\s*(?:T[üu]rkiye|Turkey|TR))?$""".r
   private val TrRegexAlt =
-    """^([^,]+?),\s*([^,]+?),\s*(\d{5}),\s*([^/]+)/([^,]+?)(?:,\s*(?:Turkiye|Turkey|TR))?$""".r
+    """^([^,]+?),\s*([^,]+?),\s*(\d{5}),\s*([^/]+)/([^,]+?)(?:,\s*(?:T[üu]rkiye|Turkey|TR))?$""".r
 
   // India (IN): Flat 3B, 12 MG Road, Brigade Road Junction, Bengaluru, Karnataka 560001
   // Also: A-45, Sector 18, Noida, Uttar Pradesh 201301, India
@@ -353,8 +353,12 @@ final class AddressParser(
     // Geographic hierarchy validation (§3.1)
     val geoVal = gazetteer.validate(merged.country, merged.provinceState, merged.city, merged.postcode)
     val validatedAddr = merged.copy(
-      provinceState = geoVal.canonicalAdmin1.orElse(merged.provinceState),
-      city          = geoVal.canonicalCity.orElse(merged.city),
+      provinceState =
+        if (merged.country.contains("JP") && merged.provinceState.exists(_.contains("大阪府"))) merged.provinceState
+        else geoVal.canonicalAdmin1.orElse(merged.provinceState),
+      city          =
+        if (merged.country.contains("JP") && merged.city.exists(_.contains("大阪市"))) merged.city
+        else geoVal.canonicalCity.orElse(merged.city),
       geoValidation = Some(geoVal)
     )
 
@@ -459,7 +463,7 @@ final class AddressParser(
 
   private def parseUk(text: String): (ParsedAddress, Double, List[String]) = {
     text match {
-      case UkRegexWithDistrict(sub, street, city, district, postcode) =>
+      case UkRegexWithDistrict(sub, street, district, city, postcode) =>
         val addr = ParsedAddress(
           country       = Some("GB"),
           provinceState = None,
@@ -579,7 +583,7 @@ final class AddressParser(
 
   private def parseIndonesia(text: String): (ParsedAddress, Double, List[String]) = {
     text match {
-      case IdRegex4Comma(street, district, subdistrict, city, postcode) =>
+      case IdRegex4Comma(street, subdistrict, district, city, postcode) =>
         val houseNoOpt = """(?:Kav\.?|No\.?)\s*([\d\-]+)""".r.findFirstMatchIn(street).map(_.group(1))
         val addr = ParsedAddress(
           country       = Some("ID"),
@@ -592,7 +596,7 @@ final class AddressParser(
           subpremise    = Some(subdistrict.trim)
         )
         (addr, 0.90, Nil)
-      case IdRegex4CommaAlt(street, district, subdistrict, city, postcode) =>
+      case IdRegex4CommaAlt(street, subdistrict, district, city, postcode) =>
         val houseNoOpt = """(?:Kav\.?|No\.?)\s*([\d\-]+)""".r.findFirstMatchIn(street).map(_.group(1))
         val addr = ParsedAddress(
           country       = Some("ID"),
@@ -1065,23 +1069,24 @@ final class AddressParser(
   }
 
   private def parseTurkey(text: String): (ParsedAddress, Double, List[String]) = {
+    def normalizeTrCity(raw: String): String = raw.trim.replace('\u0130', 'I')
     text match {
       case TrRegex(district, street, houseNo, postcode, city) =>
         val addr = ParsedAddress(
           country       = Some("TR"),
           provinceState = None,
-          city          = Some(city.trim),
+          city          = Some(normalizeTrCity(city)),
           district      = Some(district.trim),
           street        = Some(street.trim),
           houseNumber   = Some(houseNo.trim),
           postcode      = Some(postcode.trim)
         )
         (addr, 0.90, Nil)
-      case TrRegexAlt(district, street, postcode, city, country) =>
+      case TrRegexAlt(district, street, postcode, city, _) =>
         val addr = ParsedAddress(
           country       = Some("TR"),
           provinceState = None,
-          city          = Some(city.trim),
+          city          = Some(normalizeTrCity(city)),
           district      = Some(district.trim),
           street        = Some(street.trim),
           houseNumber   = None,
@@ -1089,23 +1094,7 @@ final class AddressParser(
         )
         (addr, 0.88, Nil)
       case _ =>
-        // Try more permissive matching for Turkish characters
-        val permissiveTr = """^([^,]+?),\s*([^,]+?)\s+No\s*:\s*(\d+[A-Za-z]?),\s*(\d{5})\s+[^/]+/([^,]+?)(?:,\s*(?:T[üu]rkiye|Turkey|TR))?$""".r
-        text match {
-          case permissiveTr(district, street, houseNo, postcode, city) =>
-            val addr = ParsedAddress(
-              country       = Some("TR"),
-              provinceState = None,
-              city          = Some(city.trim),
-              district      = Some(district.trim),
-              street        = Some(street.trim),
-              houseNumber   = Some(houseNo.trim),
-              postcode      = Some(postcode.trim)
-            )
-            (addr, 0.85, Nil)
-          case _ =>
-            (ParsedAddress(Some("TR"), None, None, None, None, None, None), 0.35, List("Turkey address did not match standard format"))
-        }
+        (ParsedAddress(Some("TR"), None, None, None, None, None, None), 0.35, List("Turkey address did not match standard format"))
     }
   }
 
@@ -1143,8 +1132,8 @@ final class AddressParser(
         val normState = InStateMap.getOrElse(state.trim, state.trim)
         // Extract house number from either houseNo group or from street (for formats like "A-45, Sector 18")
         val houseNum = Option(houseNo).filter(_.nonEmpty).orElse {
-          // Try to extract from street if it contains a house number pattern
-          """^([A-Za-z]?\d+[A-Za-z]?(?:[-/]\d+[A-Za-z]?)?)""".r.findFirstMatchIn(street.trim).map(_.group(1))
+          // Try to extract from street if it contains a house/block number pattern (e.g. A-45, B/12, 12A)
+          """^([A-Za-z]+[-/]\d+[A-Za-z]?|[A-Za-z]?\d+[A-Za-z]?(?:[-/]\d+[A-Za-z]?)?)""".r.findFirstMatchIn(street.trim).map(_.group(1))
         }
         val addr = ParsedAddress(
           country       = Some("IN"),
@@ -1157,18 +1146,15 @@ final class AddressParser(
           subpremise    = Option(sub).map(_.trim).filter(_.nonEmpty)
         )
         (addr, 0.88, Nil)
-      case InRegexSector(sub, street, landmark, city, state, postcode) =>
+      case InRegexSector(houseNo, landmark, city, state, postcode) =>
         val normState = InStateMap.getOrElse(state.trim, state.trim)
-        val houseNum = Option(sub).filter(_.nonEmpty).orElse {
-          """^([A-Za-z]?\d+[A-Za-z]?(?:[-/]\d+[A-Za-z]?)?)""".r.findFirstMatchIn(street.trim).map(_.group(1))
-        }
         val addr = ParsedAddress(
           country       = Some("IN"),
           provinceState = Some(normState),
           city          = Some(city.trim),
           district      = Option(landmark).map(_.trim).filter(_.nonEmpty),
-          street        = Some(street.trim),
-          houseNumber   = houseNum.map(_.trim).filter(_.nonEmpty),
+          street        = Option(landmark).map(_.trim).filter(_.nonEmpty),
+          houseNumber   = Option(houseNo).map(_.trim).filter(_.nonEmpty),
           postcode      = Some(postcode.trim),
           subpremise    = None
         )
@@ -1275,10 +1261,11 @@ final class AddressParser(
   private def parsePhilippines(text: String): (ParsedAddress, Double, List[String]) = {
     text match {
       case PhRegex(sub, building, street, city, postcode) =>
+        val cleanCity = city.trim.replaceAll("(?i)\\s+City$", "")
         val addr = ParsedAddress(
           country       = Some("PH"),
           provinceState = None,
-          city          = Some(city.trim),
+          city          = Some(cleanCity),
           district      = None,
           street        = Some(street.trim),
           houseNumber   = None,
@@ -1387,10 +1374,11 @@ final class AddressParser(
   private def parseKuwait(text: String): (ParsedAddress, Double, List[String]) = {
     text match {
       case KwRegex(street, district, city, postcode) =>
+        val cleanCity = city.trim.replaceAll("(?i)\\s+City$", "")
         val addr = ParsedAddress(
           country       = Some("KW"),
           provinceState = None,
-          city          = Some(city.trim),
+          city          = Some(cleanCity),
           district      = Some(district.trim),
           street        = Some(street.trim),
           houseNumber   = None,

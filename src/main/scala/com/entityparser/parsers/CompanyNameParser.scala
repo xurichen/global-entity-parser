@@ -43,8 +43,8 @@ final class CompanyNameParser(
   )
 
   /** Trailing parenthetical remarks to strip (e.g. "(Accounts Payable)", "(Head Office)")
-   * But preserve (Persero) for ID companies as it's a state-owned marker */
-  private val TrailingParentheticals: String = """(?i)\s*(?!\(persero\))(?!\(PERSERO\))\([^)]*\)\s*$"""
+   * Preserve (Persero) for ID state-owned entities and Korean legal-form abbreviations (주)/(유) */
+  private val TrailingParentheticals: String = """(?i)\s*(?!\(persero\))(?!\(주\))(?!\(유\))\([^)]*\)\s*$"""
 
   /** Per-country legal-form table ordered longest-match first (§2 & §3.4). */
   private val LegalForms: List[LegalFormRule] = List(
@@ -80,8 +80,8 @@ final class CompanyNameParser(
     LegalFormRule("CN", """集团有限公司$""", "GROUP_LTD_CN", LegalFormPosition.Suffix),
     LegalFormRule("CN", """有限公司$""", "LTD_CN", LegalFormPosition.Suffix),
 
-    // Macau (Suffix) - prioritize English forms for bilingual names
-    LegalFormRule("MO", """(?i),?\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    // Macau (Suffix) - prioritize English forms for bilingual names (including trailing Chinese parallel name)
+    LegalFormRule("MO", """(?i),?\s+Company\s+Limited(?:\s+[\p{InCJK_Unified_Ideographs}()（）]+)?$""", "LTD", LegalFormPosition.Suffix),
     LegalFormRule("MO", """(?i),?\s+Co\.?\s+Ltd\.?$""", "LTD", LegalFormPosition.Suffix),
     LegalFormRule("MO", """股份有限公司$""", "LTD_CN", LegalFormPosition.Suffix),
     LegalFormRule("MO", """有限责任公司$""", "LLC_CN", LegalFormPosition.Suffix),
@@ -196,8 +196,8 @@ final class CompanyNameParser(
     // Taiwan (Suffix) - uses CN rules
 
     // Crown Dependencies / Overseas Territories (VG, KY, JE, GG, IM, GI, BM) - use GB rules
-    LegalFormRule("JE", """(?i),?\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
     LegalFormRule("JE", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("JE", """(?i),?\s+Ltd\.?$""", "LTD", LegalFormPosition.Suffix),
     LegalFormRule("GG", """(?i),?\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
     LegalFormRule("GG", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
     LegalFormRule("IM", """(?i),?\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
@@ -232,11 +232,7 @@ final class CompanyNameParser(
     LegalFormRule("", """(?i)\(주\)$""", "KK", LegalFormPosition.Suffix),
     LegalFormRule("", """(?i)\s*\(주\)$""", "KK", LegalFormPosition.Suffix),
 
-    // Indonesia additional - handle (Persero) and Tbk
-    LegalFormRule("ID", """(?i),?\s+Tbk\.?$""", "Tbk", LegalFormPosition.Suffix),
-    LegalFormRule("ID", """(?i),?\s+\(Persero\)\s*Tbk\.?$""", "Tbk", LegalFormPosition.Suffix),
-    LegalFormRule("ID", """(?i)\(Persero\)""", "PT", LegalFormPosition.Suffix),
-    // Also recognize PT prefix without dots
+    // Indonesia additional - recognize PT prefix without dots
     LegalFormRule("ID", """(?i)^PT\s+""", "PT", LegalFormPosition.Prefix),
 
     // Nigeria/Kenya/Ghana/Tanzania - use GB rules
@@ -318,6 +314,13 @@ final class CompanyNameParser(
         working = (working.substring(0, m.start) + working.substring(m.end)).trim
         true
       }
+    }
+
+    // Indonesia state-owned (Persero) implies PT legal form without stripping "(Persero)" from coreName
+    if (lfCan.isEmpty && inferredCountry.contains("ID") && """(?i)\(Persero\)""".r.findFirstIn(working).isDefined) {
+      lfRaw = Some("(Persero)")
+      lfCan = Some("PT")
+      lfPos = Some(LegalFormPosition.Suffix)
     }
 
     // Strip wrapping Russian/Latin quotes around core name (e.g. ООО "Яндекс" -> Яндекс)
