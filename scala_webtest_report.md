@@ -431,3 +431,20 @@ Verified results (Muse's own compile + runs):
 Standalone country detection (raw string → country, no pipeline context): **49.4% overall**. Ambiguity groups — ID/MY 91.9%, CN/HK/MO/TW/SG 60.7%, EN (US/GB/AU/CA/SG) 45.6%, ES/MX/AR 38.1%, Arab states 37.1%, PT/BR 34.8%. Per category: Classification 80.0%, Address 66.1%, CompanyName 52.6%, PersonName 31.9%, BankAccount 25.4% (bare names/account numbers carry little country signal — in-pipeline detection also uses hints and parse structure, so this understates pipeline-level behaviour).
 
 Adjudication with the **simulated** backend changed **+0.0%** — the mechanism runs end-to-end (gate, guardrails, audit) but the simulated backend never overturns Top-1, so this proves the plumbing, not a real-model gain. Remaining work: (1) real-Gemma adjudication sampling (capped, e.g. 20 gated cases via llama-server + 1B GGUF); (2) a cosmetic bug in the eval's detailed listing prints ratios as "0.4%" instead of "42.3%" (the summary tables are correct); (3) the gazetteer still covers only 8 countries, limiting retrieval evidence elsewhere.
+
+---
+
+## 16. Round 6b: Real-Model Adjudication Sampling (Muse, 2026-11-20)
+
+Local llama-server sampling was blocked by the sandbox (the JVM's direct TCP to 127.0.0.1:8080 is denied by the platform's other_tcp permission; the user could not locate the setting). Per the user's instruction, adjudication was instead measured via OpenRouter: the 153 gated cases (of 387) were exported from the Scala Stage-1 extractor, an evenly spaced sample of 24 was adjudicated with the adjudicator's exact prompts and guardrails. Gemma 4 31B/26B free endpoints returned HTTP 429 for all calls (free quota exhausted that day), so the user approved **Nemotron 3 Ultra (free)** as the adjudicator.
+
+Results on the 24 gated sample (the hardest slice — Stage-1 Top-1 alone: 5/24):
+
+| Outcome | Count |
+|---------|-------|
+| Adjudicated correct | **6/24** (net +1 vs Top-1) |
+| Model committed to a country | 5 — **all 5 correct** (incl. 2 genuine fixes: KR address misrouted to TW, CA bank account misrouted to TW) |
+| Model abstained (UNKNOWN) | 10 — 9 harmless (Top-1 was already wrong), **1 harmful** (COMP-35: correct HK Top-1 second-guessed into UNKNOWN) |
+| No parseable JSON in model output | 9 — fell back to Top-1 unchanged |
+
+Interpretation: the adjudication mechanism works and the model's committed picks were accurate in this sample, but two engineering issues dominate: (1) output discipline — a reasoning model often fails to emit a clean JSON decision (a strict JSON-schema response format should be enforced); (2) over-abstention on thin-evidence inputs (bare account numbers / names), which the spec treats as correct behaviour (UNKNOWN beats a wrong guess) even though this labelled scoring counts it as an error. Projected effect if the sample is representative: overall standalone detection ~49.4% → ~51%. The gate also lets through cases where Top-1 is correct but low-margin (cf. COMP-35); a "do not overturn a Top-1 above score X without hard evidence" rule is a candidate refinement.
