@@ -157,3 +157,127 @@ final case class EntityClassification(
   countryHint: Option[String],
   needsHumanReview: Boolean
 )
+
+// ========================================================================
+// 3.6 RAG-Style Country/Region Detection (§6.3)
+// ========================================================================
+
+/**
+ * Evidence item for a country candidate in Stage 1 extraction.
+ * Each signal type contributes to the candidate's score.
+ */
+sealed trait CountryEvidence {
+  def signalType: String
+  def description: String
+  def weight: Double
+}
+object CountryEvidence {
+  final case class HardIdentifier(countryCode: String, identifierType: String, value: String) extends CountryEvidence {
+    val signalType = "hard_identifier"
+    val description = s"$identifierType: $value"
+    val weight = 1.0
+  }
+  final case class ScriptLanguage(script: String, language: Option[String], countryCode: String) extends CountryEvidence {
+    val signalType = "script_language"
+    val description = s"Script: $script${language.map(l => s", Lang: $l").getOrElse("")}"
+    val weight = 0.6
+  }
+  final case class PostcodeFormat(countryCode: String, postcode: String) extends CountryEvidence {
+    val signalType = "postcode_format"
+    val description = s"Postcode format matches $countryCode: $postcode"
+    val weight = 0.5
+  }
+  final case class LegalFormHit(countryCode: String, legalForm: String, position: String) extends CountryEvidence {
+    val signalType = "legal_form"
+    val description = s"Legal form '$legalForm' ($position) matches $countryCode"
+    val weight = 0.5
+  }
+  final case class SurnameHit(countryCode: String, surname: String, culture: String) extends CountryEvidence {
+    val signalType = "surname"
+    val description = s"Surname '$surname' ($culture) matches $countryCode"
+    val weight = 0.4
+  }
+  final case class GazetteerHit(countryCode: String, placeName: String, adminPath: String, matchedKey: String) extends CountryEvidence {
+    val signalType = "gazetteer"
+    val description = s"Place '$placeName' found in $countryCode ($adminPath)"
+    val weight = 0.7
+  }
+  final case class PhoneCountryCode(countryCode: String, phoneCode: String) extends CountryEvidence {
+    val signalType = "phone_country_code"
+    val description = s"Phone country code $phoneCode matches $countryCode"
+    val weight = 0.8
+  }
+  final case class CcTLD(countryCode: String, domain: String) extends CountryEvidence {
+    val signalType = "cctld"
+    val description = s"ccTLD .$domain matches $countryCode"
+    val weight = 0.7
+  }
+  final case class ExplicitHint(countryCode: String, source: String) extends CountryEvidence {
+    val signalType = "explicit_hint"
+    val description = s"Explicit hint from $source: $countryCode"
+    val weight = 0.9
+  }
+}
+
+/**
+ * A single country candidate with its aggregated score and evidence.
+ */
+final case class CountryCandidate(
+  countryCode: String,
+  score: Double,
+  evidence: List[CountryEvidence]
+) {
+  def primaryEvidence: List[CountryEvidence] = evidence.filter(_.weight >= 0.5)
+  def hasHardIdentifier: Boolean = evidence.exists(_.signalType == "hard_identifier")
+  def hardIdentifierCountry: Option[String] = evidence.find(_.signalType == "hard_identifier").map(_.asInstanceOf[CountryEvidence.HardIdentifier].countryCode)
+}
+
+/**
+ * Result of Stage 1 candidate extraction: Top 3-5 candidates with scores and evidence.
+ */
+final case class CountryCandidates(
+  candidates: List[CountryCandidate],
+  rawText: String,
+  hasHardIdentifier: Boolean,
+  hardIdentifierCountry: Option[String]
+) {
+  def top1: Option[CountryCandidate] = candidates.headOption
+  def top2: Option[CountryCandidate] = candidates.lift(1)
+  def margin: Double = (top1, top2) match {
+    case (Some(t1), Some(t2)) => t1.score - t2.score
+    case (Some(t1), None) => 1.0
+    case _ => 0.0
+  }
+  def needsAdjudication: Boolean = {
+    // Gate: Top1-Top2 margin < 0.15 OR Top1 score < 0.6
+    // But skip if hard identifier is present and consistent
+    if (hasHardIdentifier && hardIdentifierCountry == top1.map(_.countryCode)) false
+    else margin < 0.15 || top1.exists(_.score < 0.6)
+  }
+}
+
+/**
+ * Result of Stage 2 LLM adjudication.
+ */
+final case class CountryAdjudication(
+  chosenCountry: Option[String],
+  confidence: Double,
+  decisiveEvidence: String,
+  rawModelOutput: String,
+  candidateSet: List[String],
+  auditId: String
+)
+
+/**
+ * Complete country detection result combining both stages.
+ */
+final case class CountryDetectionResult(
+  stage1: CountryCandidates,
+  stage2: Option[CountryAdjudication],
+  finalCountry: Option[String],
+  finalConfidence: Double,
+  isUnknown: Boolean,
+  provenance: String
+) {
+  def countryCode: Option[String] = finalCountry
+}

@@ -26,6 +26,16 @@ final case class CityRecord(
   aliases: Set[String]
 )
 
+/**
+ * Gazetteer retrieval evidence: a matched city record with its full administrative path.
+ * Used as evidence in Stage 1 country candidate extraction.
+ */
+final case class PlaceEvidence(
+  city: CityRecord,
+  matchedName: String,
+  matchedKey: String
+)
+
 class GeoGazetteer(
   val admin1s: List[Admin1Record],
   val cities: List[CityRecord]
@@ -44,6 +54,24 @@ class GeoGazetteer(
     cities.flatMap { c =>
       val keys = (c.aliases + c.canonicalName).map(k => EntityNormalizer.keyToken(k, c.countryCode == "DE"))
       keys.map(k => (c.countryCode, k) -> c)
+    }.groupBy(_._1).view.mapValues(_.map(_._2).distinct).toMap
+
+  /**
+   * REVERSE INDEX: place name (normalized key) → List of CityRecords across ALL countries.
+   * This is the core of the RAG retrieval: given a place name token, find all countries
+   * where a city/admin1 with that name exists.
+   */
+  private val reversePlaceIndex: Map[String, List[CityRecord]] =
+    cities.flatMap { c =>
+      val keys = (c.aliases + c.canonicalName).map(k => EntityNormalizer.keyToken(k, c.countryCode == "DE"))
+      keys.map(k => k -> c)
+    }.groupBy(_._1).view.mapValues(_.map(_._2).distinct).toMap
+
+  /** Also include admin1 names in reverse index for province/state level matches */
+  private val reverseAdmin1Index: Map[String, List[Admin1Record]] =
+    admin1s.flatMap { a =>
+      val keys = (a.aliases + a.canonicalName + a.admin1Code).map(k => EntityNormalizer.keyToken(k, a.countryCode == "DE"))
+      keys.map(k => k -> a)
     }.groupBy(_._1).view.mapValues(_.map(_._2).distinct).toMap
 
   private val postcodePatterns: Map[String, scala.util.matching.Regex] = Map(
@@ -70,6 +98,35 @@ class GeoGazetteer(
     val cc  = country.toUpperCase(java.util.Locale.ROOT)
     val key = EntityNormalizer.keyToken(raw, cc == "DE")
     citiesByCountryAndKey.getOrElse((cc, key), Nil)
+  }
+
+  /**
+   * RAG RETRIEVAL: Reverse lookup — place name → candidate CityRecords across ALL countries.
+   * Returns PlaceEvidence with the matched city record, the raw matched name, and the normalized key.
+   * This is the new capability required for Stage 1 candidate extraction.
+   */
+  def lookupPlace(raw: String): List[PlaceEvidence] = {
+    val key = EntityNormalizer.keyToken(raw, raw.exists(c => c >= 'A' && c <= 'Z'))
+    val cityMatches = reversePlaceIndex.getOrElse(key, Nil)
+    val admin1Matches = reverseAdmin1Index.getOrElse(key, Nil).map { a1 =>
+      CityRecord(a1.countryCode, a1.admin1Code, a1.canonicalName, a1.aliases)
+    }
+    (cityMatches ++ admin1Matches).distinct.map { c =>
+      PlaceEvidence(c, raw, key)
+    }
+  }
+
+  /**
+   * Lookup place by normalized key directly (for internal use).
+   */
+  def lookupPlaceByKey(key: String): List[PlaceEvidence] = {
+    val cityMatches = reversePlaceIndex.getOrElse(key, Nil)
+    val admin1Matches = reverseAdmin1Index.getOrElse(key, Nil).map { a1 =>
+      CityRecord(a1.countryCode, a1.admin1Code, a1.canonicalName, a1.aliases)
+    }
+    (cityMatches ++ admin1Matches).distinct.map { c =>
+      PlaceEvidence(c, c.canonicalName, key)
+    }
   }
 
   /**
@@ -143,6 +200,13 @@ class GeoGazetteer(
           issues = issues.toList
         )
     }
+  }
+
+  /**
+   * Get all unique country codes present in the gazetteer.
+   */
+  def allCountryCodes: Set[String] = {
+    (admin1s.map(_.countryCode) ++ cities.map(_.countryCode)).toSet
   }
 }
 

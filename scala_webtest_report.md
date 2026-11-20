@@ -406,3 +406,28 @@ Executed by Pi (Nemotron 3 Ultra) after two failed attempts by other configurati
 | HardCase Core | 20/20 | 20/20 |
 
 The only remaining PersonName failures are PERS-47/48 (South Asian names), which are by-design routed to LLM fallback. Remaining failures overall: 33 (Address 9, BankAccount 17, CompanyName 5, PersonName 2 by-design).
+
+---
+
+## 15. Round 6: RAG-Style Country Detection Prototype (Reviewer-Verified & Salvaged, Muse 2026-11-20)
+
+Implemented per report.md §6.3 / REQUIREMENTS.md §3.6:
+
+- **GeoGazetteer reverse index**: place name → candidate countries (`lookupPlace`/`lookupPlaceByKey`, incl. admin1 names), returning `PlaceEvidence`.
+- **CountryDetector.extractCandidates**: Stage 1 — deterministic signals (hard identifiers IBAN/BIC/phone/ccTLD, script, legal forms, surnames, anchors) + gazetteer retrieval evidence → `CountryCandidates` (Top 3–5 with scores + evidence).
+- **CountryAdjudicator**: Stage 2 — gate (Top1−Top2 < 0.15 or Top1 < 0.6, skipped when a hard identifier agrees with Top-1), Gemma via `LlamaCppClient`, all four guardrails (hard identifier cannot be overturned; candidate-set-only; confidence < 0.5 → UNKNOWN; audit fields incl. raw model output).
+- **CountryDetectionEvaluation**: new eval entry measuring standalone country-detection accuracy on the 387-case web set.
+
+Reviewer salvage (Muse): the Pi run was cut off twice (output truncation, then an environment restart) leaving `CountryAdjudicator.scala` uncompilable (wrong JsonCodec imports, missing JsString wrappers, a non-existent `fieldNumber`, an illegal pattern alternative) — fixed mechanically. A real regression was also caught and fixed: the new `TwAnchor` regex contained `\d{3,5}[号张]`, which matched any mainland address with a house number (e.g. 体育西路103号) and misrouted it to TW, breaking the HardCase geo-hierarchy check; the digit alternative was removed (TW city-name anchors kept).
+
+Verified results (Muse's own compile + runs):
+
+| Suite | Before | After |
+|-------|--------|-------|
+| WebTest total | 354/387 (91.5%) | 354/387 (91.5%) — zero regression |
+| HardCase core checks | 20/20 | 20/20 |
+| HardCase hard cases | 5/10 rules, 8/10 +Gemma | **6/10 rules, 9/10 +Gemma** |
+
+Standalone country detection (raw string → country, no pipeline context): **49.4% overall**. Ambiguity groups — ID/MY 91.9%, CN/HK/MO/TW/SG 60.7%, EN (US/GB/AU/CA/SG) 45.6%, ES/MX/AR 38.1%, Arab states 37.1%, PT/BR 34.8%. Per category: Classification 80.0%, Address 66.1%, CompanyName 52.6%, PersonName 31.9%, BankAccount 25.4% (bare names/account numbers carry little country signal — in-pipeline detection also uses hints and parse structure, so this understates pipeline-level behaviour).
+
+Adjudication with the **simulated** backend changed **+0.0%** — the mechanism runs end-to-end (gate, guardrails, audit) but the simulated backend never overturns Top-1, so this proves the plumbing, not a real-model gain. Remaining work: (1) real-Gemma adjudication sampling (capped, e.g. 20 gated cases via llama-server + 1B GGUF); (2) a cosmetic bug in the eval's detailed listing prints ratios as "0.4%" instead of "42.3%" (the summary tables are correct); (3) the gazetteer still covers only 8 countries, limiting retrieval evidence elsewhere.
