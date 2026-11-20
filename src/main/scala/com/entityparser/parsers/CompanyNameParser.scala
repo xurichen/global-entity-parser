@@ -28,13 +28,21 @@ final class CompanyNameParser(
     canonical: String
   )
 
-  /** Separate listing markers (§3.4): Tbk (ID), plc (GB), Bhd (MY), etc. */
+  /** Separate listing markers (§3.4): Tbk (ID) - distinct from legal form. */
   private val ListingMarkers: List[ListingMarkerRule] = List(
-    ListingMarkerRule("ID", """(?i)(?:,?\s+|\s+)Tbk\.?$""", "Tbk"),
-    ListingMarkerRule("GB", """(?i)(?:,?\s+|\s+)P\.?L\.?C\.?$""", "PLC"),
-    ListingMarkerRule("MY", """(?i)(?:,?\s+|\s+)Berhad$""", "BHD"),
-    ListingMarkerRule("MY", """(?i)(?:,?\s+|\s+)Bhd\.?$""", "BHD")
+    ListingMarkerRule("ID", """(?i)(?:,?\s+|\s+)\(Persero\)\s*Tbk\.?$""", "Tbk"),
+    ListingMarkerRule("ID", """(?i)(?:,?\s+|\s+)Tbk\.?$""", "Tbk")
+    // Note: plc (GB) and Bhd (MY) are legal forms, not separate listing markers
   )
+
+  /** Department/prefix noise to strip before parsing (e.g. "Finance Dept:", "Accounts Payable") */
+  private val DepartmentPrefixes: List[String] = List(
+    """(?i)^(?:Finance\s+Dept\.?|Accounts?\s+Payable|Dept\.?|Department)\s*[:-]?\s*""",
+    """(?i)^(?:Attn\.?|Attention|C/O|Care\s+Of)\s*[:-]?\s*"""
+  )
+
+  /** Trailing parenthetical remarks to strip (e.g. "(Accounts Payable)", "(Head Office)") */
+  private val TrailingParentheticals: String = """(?i)\s*\([^)]*\)\s*$"""
 
   /** Per-country legal-form table ordered longest-match first (§2 & §3.4). */
   private val LegalForms: List[LegalFormRule] = List(
@@ -81,15 +89,27 @@ final class CompanyNameParser(
     LegalFormRule("SG", """(?i),?\s+Pte\.?\s*Ltd\.?$""", "PTE_LTD", LegalFormPosition.Suffix),
     LegalFormRule("MY", """(?i),?\s+Sdn\.?\s*Bhd\.?$""", "SDN_BHD", LegalFormPosition.Suffix),
 
+    // Australia (Suffix)
+    LegalFormRule("AU", """(?i),?\s+Pty\.?\s*Ltd\.?$""", "PTY_LTD", LegalFormPosition.Suffix),
+    LegalFormRule("AU", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("AU", """(?i),?\s+Ltd\.?$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("AU", """(?i),?\s+P\.?L\.?C\.?$""", "PLC", LegalFormPosition.Suffix),
+
     // UK / US / Commonwealth (Suffix)
     LegalFormRule("US", """(?i),?\s+Incorporated$""", "INC", LegalFormPosition.Suffix),
     LegalFormRule("US", """(?i),?\s+Inc\.?$""", "INC", LegalFormPosition.Suffix),
     LegalFormRule("US", """(?i),?\s+Corporation$""", "CORP", LegalFormPosition.Suffix),
     LegalFormRule("US", """(?i),?\s+Corp\.?$""", "CORP", LegalFormPosition.Suffix),
     LegalFormRule("US", """(?i),?\s+L\.?L\.?C\.?$""", "LLC", LegalFormPosition.Suffix),
+    LegalFormRule("US", """(?i),?\s+&\s*Co\.?$""", "CO", LegalFormPosition.Suffix),
     LegalFormRule("GB", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
     LegalFormRule("GB", """(?i),?\s+Ltd\.?$""", "LTD", LegalFormPosition.Suffix),
     LegalFormRule("GB", """(?i),?\s+L\.?L\.?P\.?$""", "LLP", LegalFormPosition.Suffix),
+    LegalFormRule("GB", """(?i),?\s+P\.?L\.?C\.?$""", "PLC", LegalFormPosition.Suffix),
+
+    // Malaysia (Suffix) - Bhd/Berhad as legal form
+    LegalFormRule("MY", """(?i),?\s+Berhad$""", "BHD", LegalFormPosition.Suffix),
+    LegalFormRule("MY", """(?i),?\s+Bhd\.?$""", "BHD", LegalFormPosition.Suffix),
 
     // France / Spain / Netherlands / Italy (Suffix)
     LegalFormRule("FR", """(?i),?\s+S\.?A\.?R\.?L\.?$""", "SARL", LegalFormPosition.Suffix),
@@ -98,7 +118,94 @@ final class CompanyNameParser(
     LegalFormRule("NL", """(?i),?\s+B\.?V\.?$""", "BV", LegalFormPosition.Suffix),
     LegalFormRule("NL", """(?i),?\s+N\.?V\.?$""", "NV", LegalFormPosition.Suffix),
     LegalFormRule("IT", """(?i),?\s+S\.?p\.?A\.?$""", "SPA", LegalFormPosition.Suffix),
-    LegalFormRule("FR", """(?i),?\s+S\.?A\.?$""", "SA", LegalFormPosition.Suffix)
+    LegalFormRule("FR", """(?i),?\s+S\.?A\.?$""", "SA", LegalFormPosition.Suffix),
+
+    // Turkey (Suffix)
+    LegalFormRule("TR", """(?i),?\s+A\.?\s*\.?\s*Ş\.?$""", "AS", LegalFormPosition.Suffix),
+    LegalFormRule("TR", """(?i),?\s+Anonim\s+Şirket$""", "AS", LegalFormPosition.Suffix),
+    LegalFormRule("TR", """(?i),?\s+Ltd\.?\s*Şti\.?$""", "LTD_STI", LegalFormPosition.Suffix),
+    LegalFormRule("TR", """(?i),?\s+Limited\s+Şirket$""", "LTD_STI", LegalFormPosition.Suffix),
+
+    // UAE (Suffix)
+    LegalFormRule("AE", """(?i),?\s+PJSC$""", "PJSC", LegalFormPosition.Suffix),
+    LegalFormRule("AE", """(?i),?\s+P\.?J\.?S\.?C\.?$""", "PJSC", LegalFormPosition.Suffix),
+    LegalFormRule("AE", """(?i),?\s+L\.?L\.?C\.?$""", "LLC", LegalFormPosition.Suffix),
+    LegalFormRule("AE", """(?i),?\s+PrJSC$""", "PRJSC", LegalFormPosition.Suffix),
+
+    // Qatar (Suffix)
+    LegalFormRule("QA", """(?i),?\s+Q\.?P\.?S\.?C\.?$""", "QPSC", LegalFormPosition.Suffix),
+    LegalFormRule("QA", """(?i),?\s+QPSC$""", "QPSC", LegalFormPosition.Suffix),
+    LegalFormRule("QA", """(?i),?\s+W\.?L\.?L\.?$""", "WLL", LegalFormPosition.Suffix),
+    LegalFormRule("QA", """(?i),?\s+WLL$""", "WLL", LegalFormPosition.Suffix),
+
+    // Portugal (Suffix)
+    LegalFormRule("PT", """(?i),?\s+L\.?d\.?a\.?$""", "LDA", LegalFormPosition.Suffix),
+    LegalFormRule("PT", """(?i),?\s+Limitada$""", "LDA", LegalFormPosition.Suffix),
+    LegalFormRule("PT", """(?i),?\s+S\.?A\.?$""", "SA", LegalFormPosition.Suffix),
+
+    // Brazil (Suffix)
+    LegalFormRule("BR", """(?i),?\s+Ltda\.?$""", "LTDA", LegalFormPosition.Suffix),
+    LegalFormRule("BR", """(?i),?\s+Limitada$""", "LTDA", LegalFormPosition.Suffix),
+    LegalFormRule("BR", """(?i),?\s+S\.?A\.?(?:\s*[-–—].*)?$""", "SA", LegalFormPosition.Suffix),
+    LegalFormRule("BR", """(?i),?\s+S\.?A\.?\s*[-–—]""", "SA", LegalFormPosition.Suffix),
+    LegalFormRule("BR", """(?i),?\s+S\/A(?:\s*[-–—].*)?$""", "SA", LegalFormPosition.Suffix),
+
+    // Argentina (Suffix)
+    LegalFormRule("AR", """(?i),?\s+S\.?R\.?L\.?(?:\s*[-–—].*)?$""", "SRL", LegalFormPosition.Suffix),
+    LegalFormRule("AR", """(?i),?\s+Sociedad\s+de\s+Responsabilidad\s+Limitada(?:\s*[-–—].*)?$""", "SRL", LegalFormPosition.Suffix),
+    LegalFormRule("AR", """(?i),?\s+S\.?A\.?(?:\s*[-–—].*)?$""", "SA", LegalFormPosition.Suffix),
+    LegalFormRule("AR", """(?i),?\s+Sociedad\s+An[oó]nima(?:\s*[-–—].*)?$""", "SA", LegalFormPosition.Suffix),
+
+    // South Africa (Suffix)
+    LegalFormRule("ZA", """(?i),?\s+\(Pty\)\s*Ltd\.?$""", "PTY_LTD", LegalFormPosition.Suffix),
+    LegalFormRule("ZA", """(?i),?\s+Proprietary\s+Limited$""", "PTY_LTD", LegalFormPosition.Suffix),
+    LegalFormRule("ZA", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("ZA", """(?i),?\s+Ltd\.?$""", "LTD", LegalFormPosition.Suffix),
+
+    // Egypt (Suffix)
+    LegalFormRule("EG", """(?i),?\s+S\.?A\.?E\.?$""", "SAE", LegalFormPosition.Suffix),
+    LegalFormRule("EG", """(?i),?\s+Soci[ée]t[ée]\s+Anonyme\s+[EÉ]gyptienne$""", "SAE", LegalFormPosition.Suffix),
+    LegalFormRule("EG", """(?i),?\s+S\.?A\.?$""", "SA", LegalFormPosition.Suffix),
+
+    // Morocco (Suffix) - already covered by FR SA/SARL
+
+    // Hong Kong (Suffix) - uses GB/UK rules
+
+    // Macau (Suffix) - uses PT/FR rules
+
+    // Taiwan (Suffix) - uses CN rules
+
+    // Crown Dependencies / Overseas Territories (VG, KY, JE, GG, IM, GI, BM) - use GB rules
+
+    // Philippines (Suffix) - uses US rules
+
+    // Malaysia additional - already covered
+
+    // Indonesia additional - already covered
+
+    // Vietnam (Suffix)
+    LegalFormRule("VN", """(?i),?\s+JSC$""", "JSC", LegalFormPosition.Suffix),
+    LegalFormRule("VN", """(?i),?\s+Joint\s+Stock\s+Company$""", "JSC", LegalFormPosition.Suffix),
+    LegalFormRule("VN", """(?i),?\s+Corporation$""", "CORP", LegalFormPosition.Suffix),
+    LegalFormRule("VN", """(?i),?\s+Corp\.?$""", "CORP", LegalFormPosition.Suffix),
+
+    // Korea (Suffix)
+    LegalFormRule("KR", """(?i),?\s+주식회사$""", "KK", LegalFormPosition.Suffix),
+    LegalFormRule("KR", """(?i),?\s+\(주\)$""", "KK", LegalFormPosition.Suffix),
+    LegalFormRule("KR", """(?i),?\s+유한회사$""", "YH", LegalFormPosition.Suffix),
+    LegalFormRule("KR", """(?i),?\s+\(유\)$""", "YH", LegalFormPosition.Suffix),
+
+    // Indonesia additional - handle (Persero)
+    LegalFormRule("ID", """(?i),?\s+Tbk\.?$""", "TBK", LegalFormPosition.Suffix),
+    LegalFormRule("ID", """(?i),?\s+\(Persero\)\s*Tbk\.?$""", "TBK", LegalFormPosition.Suffix),
+
+    // Nigeria/Kenya/Ghana/Tanzania - use GB rules
+
+    // Ethiopia - no standard suffix in common usage
+
+    // Japan additional - already covered
+
+    // Korea additional - uses JP KK pattern
   )
 
   private val CompanySchema: JsObject = JsObject(List(
@@ -120,9 +227,20 @@ final class CompanyNameParser(
 
   def parse(cleaned: CleanedInput, countryHint: Option[String] = None): ParseResult[ParsedCompanyName] = {
     var working = cleaned.cleanedText.trim
+
+    // Strip department prefixes first (e.g. "Finance Dept: ", "Accounts Payable: ")
+    DepartmentPrefixes.foreach { prefixRegex =>
+      prefixRegex.r.findFirstMatchIn(working).foreach { m =>
+        working = (working.substring(0, m.start) + working.substring(m.end)).trim
+      }
+    }
+
+    // Strip trailing parenthetical remarks (e.g. "(Accounts Payable)")
+    working = TrailingParentheticals.r.replaceAllIn(working, "").trim
+
     val detectedCountry = CountryDetector.detectCountry(working, countryHint)
 
-    // 1. Strip listing marker first (e.g. "Tbk" in "PT Astra International Tbk", or "plc" in "Shell plc")
+    // 1. Strip listing marker first (e.g. "Tbk" in "PT Astra International Tbk")
     var listingRaw: Option[String] = None
     var listingCan: Option[String] = None
     var inferredCountry: Option[String] = detectedCountry

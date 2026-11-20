@@ -50,12 +50,39 @@ final class AddressParser(
     """^([^,\d]+?)\s+(\d+[a-zA-Z]?(?:-\d+[a-zA-Z]?)?),\s*(\d{5})\s+([^,]+?)(?:,\s*([^,]+?))?(?:,\s*(?:Germany|Deutschland|DE))?$""".r
 
   // UK: 221B Baker Street, London, NW1 6XE
+  // UK postcode format: A9 9AA, A99 9AA, AA9 9AA, AA99 9AA, A9A 9AA, AA9A 9AA
+  // Outward code: 1-2 letters + 1-2 digits + optional letter; Inward code: digit + 2 letters
+  // Fixed: removed optional district group that was consuming first letter of postcode
   private val UkRegex =
-    """^(\d+[A-Za-z]?)\s+([^,]+?),\s*([^,]+?)(?:,\s*([^,]+?))?,?\s*([A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})(?:,\s*(?:UK|United Kingdom|GB))?$""".r
+    """^(\d+[A-Za-z]?)\s+([^,]+?),\s*([^,]+?),\s*([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})(?:,\s*(?:UK|United Kingdom|GB))?$""".r
 
   // Japan: 〒150-0002 東京都渋谷区渋谷2-21-1
   private val JpRegex =
     """^(?:〒\s*(\d{3}-?\d{4})\s*)?(東京都|大阪府|京都府|北海道|[\p{InCJK_Unified_Ideographs}]{2,4}県)([\p{InCJK_Unified_Ideographs}]{1,8}(?:市|区|郡))([\p{InCJK_Unified_Ideographs}A-Za-zぁ-んァ-ヶ]+?)(\d+(?:-\d+)*)(.*)$""".r
+
+  // Italy: Via Roma 42, 20121 Milano
+  private val ItRegex =
+    """^([^,]+?)\s+(\d+[A-Za-z]?(?:-\d+[A-Za-z]?)?),\s*(\d{5})\s+([^,]+?)(?:,\s*(?:Italy|Italia|IT))?$""".r
+
+  // Indonesia: Jl. Jend. Sudirman Kav. 52-53, Kebayoran Baru, Jakarta Selatan 12190
+  private val IdRegex =
+    """^(?:Jl\.?\s+|Jalan\s+)([^,]+?(?:\s+Kav\.?\s*[\d\-]+)?),\s*([^,]+?),\s*([^,]+?)\s+(\d{5})(?:,\s*(?:Indonesia|ID))?$""".r
+
+  // South Korea: 152 Teheran-ro, Gangnam-gu, Seoul 06236
+  private val KrRegex =
+    """^(\d+[A-Za-z]?(?:-\d+)?)\s+([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+(\d{5})(?:,\s*(?:South Korea|Korea|KR))?$""".r
+
+  // Spain: Calle de Alcalá 45, 28014 Madrid
+  private val EsRegex =
+    """^([^,]+?)\s+(\d+[A-Za-z]?(?:-\d+[A-Za-z]?)?),\s*(\d{5})\s+([^,]+?)(?:,\s*(?:España|Spain|ES))?$""".r
+
+  // France: Champs-Élysées 75, 75008 Paris
+  private val FrRegex =
+    """^([^,]+?)\s+(\d+[A-Za-z]?(?:-\d+[A-Za-z]?)?),\s*(\d{5})\s+([^,]+?)(?:,\s*(?:France|FR))?$""".r
+
+  // Brazil: Rua Augusta 1500, 01305-100 São Paulo
+  private val BrRegex =
+    """^([^,]+?)\s+(\d+[A-Za-z]?(?:-\d+[A-Za-z]?)?),\s*(\d{5}-?\d{3})\s+([^,]+?)(?:,\s*(?:Brazil|Brasil|BR))?$""".r
 
   def parse(cleaned: CleanedInput, countryHint: Option[String] = None): ParseResult[ParsedAddress] = {
     val text    = cleaned.cleanedText
@@ -67,6 +94,12 @@ final class AddressParser(
       case Some("DE") => parseGermany(text)
       case Some("GB") => parseUk(text)
       case Some("JP") => parseJapan(text)
+      case Some("IT") => parseItaly(text)
+      case Some("ID") => parseIndonesia(text)
+      case Some("KR") => parseKorea(text)
+      case Some("ES") => parseSpain(text)
+      case Some("FR") => parseFrance(text)
+      case Some("BR") => parseBrazil(text)
       case _          => (ParsedAddress(country, None, None, None, None, None, None), 0.25, List("No deterministic rule template matched country/format"))
     }
 
@@ -191,7 +224,7 @@ final class AddressParser(
 
   private def parseUk(text: String): (ParsedAddress, Double, List[String]) = {
     text match {
-      case UkRegex(houseNo, street, city, _, postcode) =>
+      case UkRegex(houseNo, street, city, postcode) =>
         val addr = ParsedAddress(
           country       = Some("GB"),
           provinceState = None,
@@ -224,6 +257,114 @@ final class AddressParser(
         (addr, 0.91, Nil)
       case _ =>
         (ParsedAddress(Some("JP"), None, None, None, None, None, None), 0.35, List("Japanese address did not match standard large-to-small pattern"))
+    }
+  }
+
+  private def parseItaly(text: String): (ParsedAddress, Double, List[String]) = {
+    text match {
+      case ItRegex(street, houseNo, postcode, city) =>
+        val addr = ParsedAddress(
+          country       = Some("IT"),
+          provinceState = None,
+          city          = Some(city.trim),
+          district      = None,
+          street        = Some(street.trim),
+          houseNumber   = Some(houseNo.trim),
+          postcode      = Some(postcode.trim)
+        )
+        (addr, 0.92, Nil)
+      case _ =>
+        (ParsedAddress(Some("IT"), None, None, None, None, None, None), 0.35, List("Italian address did not match street+houseNo, postcode+city pattern"))
+    }
+  }
+
+  private def parseIndonesia(text: String): (ParsedAddress, Double, List[String]) = {
+    text match {
+      case IdRegex(street, district, city, postcode) =>
+        val addr = ParsedAddress(
+          country       = Some("ID"),
+          provinceState = None,
+          city          = Some(city.trim),
+          district      = Some(district.trim),
+          street        = Some(street.trim),
+          houseNumber   = None,
+          postcode      = Some(postcode.trim)
+        )
+        (addr, 0.90, Nil)
+      case _ =>
+        (ParsedAddress(Some("ID"), None, None, None, None, None, None), 0.35, List("Indonesian address did not match Jl. street, district, city postcode pattern"))
+    }
+  }
+
+  private def parseKorea(text: String): (ParsedAddress, Double, List[String]) = {
+    text match {
+      case KrRegex(houseNo, street, district, city, postcode) =>
+        val addr = ParsedAddress(
+          country       = Some("KR"),
+          provinceState = None,
+          city          = Some(city.trim),
+          district      = Some(district.trim),
+          street        = Some(street.trim),
+          houseNumber   = Some(houseNo.trim),
+          postcode      = Some(postcode.trim)
+        )
+        (addr, 0.90, Nil)
+      case _ =>
+        (ParsedAddress(Some("KR"), None, None, None, None, None, None), 0.35, List("Korean address did not match houseNo street, district, city postcode pattern"))
+    }
+  }
+
+  private def parseSpain(text: String): (ParsedAddress, Double, List[String]) = {
+    text match {
+      case EsRegex(street, houseNo, postcode, city) =>
+        val addr = ParsedAddress(
+          country       = Some("ES"),
+          provinceState = None,
+          city          = Some(city.trim),
+          district      = None,
+          street        = Some(street.trim),
+          houseNumber   = Some(houseNo.trim),
+          postcode      = Some(postcode.trim)
+        )
+        (addr, 0.92, Nil)
+      case _ =>
+        (ParsedAddress(Some("ES"), None, None, None, None, None, None), 0.35, List("Spanish address did not match street+houseNo, postcode+city pattern"))
+    }
+  }
+
+  private def parseFrance(text: String): (ParsedAddress, Double, List[String]) = {
+    text match {
+      case FrRegex(street, houseNo, postcode, city) =>
+        val addr = ParsedAddress(
+          country       = Some("FR"),
+          provinceState = None,
+          city          = Some(city.trim),
+          district      = None,
+          street        = Some(street.trim),
+          houseNumber   = Some(houseNo.trim),
+          postcode      = Some(postcode.trim)
+        )
+        (addr, 0.92, Nil)
+      case _ =>
+        (ParsedAddress(Some("FR"), None, None, None, None, None, None), 0.35, List("French address did not match street+houseNo, postcode+city pattern"))
+    }
+  }
+
+  private def parseBrazil(text: String): (ParsedAddress, Double, List[String]) = {
+    text match {
+      case BrRegex(street, houseNo, postcode, city) =>
+        val addr = ParsedAddress(
+          country       = Some("BR"),
+          provinceState = None,
+          city          = Some(city.trim),
+          district      = None,
+          street        = Some(street.trim),
+          houseNumber   = Some(houseNo.trim),
+          postcode      = Some(postcode.trim)
+        )
+        (addr, 0.90, Nil)
+      case _ =>
+        (ParsedAddress(Some("BR"), None, None, None, None, None, None), 0.35, List("Brazilian address did not match street+houseNo, postcode+city pattern"))
     }
   }
 }

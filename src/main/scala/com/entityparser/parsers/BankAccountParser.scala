@@ -40,10 +40,65 @@ final class BankAccountParser {
     "SA" -> IbanSpec(24, (0, 2),  None,         2),
     "PL" -> IbanSpec(28, (0, 8),  None,         8),
     "SE" -> IbanSpec(24, (0, 3),  None,         3),
-    "IE" -> IbanSpec(22, (0, 4),  Some((4, 10)), 10)
+    "IE" -> IbanSpec(22, (0, 4),  Some((4, 10)), 10),
+    // Additional IBAN countries from iban.com registry
+    "TR" -> IbanSpec(26, (0, 5),  None,         5),
+    "QA" -> IbanSpec(29, (0, 4),  None,         4),
+    "KW" -> IbanSpec(30, (0, 4),  None,         4),
+    "PT" -> IbanSpec(25, (0, 4),  None,         4),
+    "EG" -> IbanSpec(29, (0, 4),  None,         4),
+    "MA" -> IbanSpec(28, (0, 4),  None,         4),
+    "NO" -> IbanSpec(15, (0, 4),  None,         4),
+    "DK" -> IbanSpec(18, (0, 4),  None,         4),
+    "CZ" -> IbanSpec(24, (0, 4),  None,         4),
+    "HU" -> IbanSpec(28, (0, 4),  None,         4),
+    "RO" -> IbanSpec(24, (0, 4),  None,         4),
+    "GR" -> IbanSpec(27, (0, 3),  None,         3),
+    "FI" -> IbanSpec(18, (0, 6),  None,         6),
+    "BG" -> IbanSpec(22, (0, 4),  None,         4),
+    "HR" -> IbanSpec(21, (0, 7),  None,         7),
+    "SI" -> IbanSpec(19, (0, 5),  None,         5),
+    "SK" -> IbanSpec(24, (0, 4),  None,         4),
+    "LT" -> IbanSpec(20, (0, 5),  None,         5),
+    "LV" -> IbanSpec(21, (0, 4),  None,         4),
+    "EE" -> IbanSpec(20, (0, 2),  None,         2),
+    "MT" -> IbanSpec(31, (0, 4),  None,         4),
+    "CY" -> IbanSpec(28, (0, 3),  None,         3),
+    "LU" -> IbanSpec(20, (0, 3),  None,         3),
+    "IS" -> IbanSpec(26, (0, 4),  None,         4),
+    "FO" -> IbanSpec(18, (0, 4),  None,         4),
+    "GI" -> IbanSpec(23, (0, 4),  None,         4),
+    "MC" -> IbanSpec(27, (0, 5),  None,         5),
+    "SM" -> IbanSpec(27, (1, 6),  None,         6),
+    "VA" -> IbanSpec(22, (0, 3),  None,         3),
+    "LI" -> IbanSpec(21, (0, 5),  None,         5),
+    "AD" -> IbanSpec(24, (0, 4),  None,         4),
+    "AL" -> IbanSpec(28, (0, 8),  None,         8),
+    "AZ" -> IbanSpec(28, (0, 4),  None,         4),
+    "BH" -> IbanSpec(22, (0, 4),  None,         4),
+    "GE" -> IbanSpec(22, (0, 2),  None,         2),
+    "JO" -> IbanSpec(30, (0, 4),  None,         4),
+    "KZ" -> IbanSpec(20, (0, 3),  None,         3),
+    "KH" -> IbanSpec(30, (0, 4),  None,         4),
+    "LB" -> IbanSpec(28, (0, 4),  None,         4),
+    "MK" -> IbanSpec(19, (0, 3),  None,         3),
+    "MD" -> IbanSpec(24, (0, 2),  None,         2),
+    "ME" -> IbanSpec(22, (0, 3),  None,         3),
+    "MR" -> IbanSpec(27, (0, 5),  None,         5),
+    "MU" -> IbanSpec(30, (0, 4),  None,         4),
+    "PS" -> IbanSpec(29, (0, 4),  None,         4),
+    "QA" -> IbanSpec(29, (0, 4),  None,         4),
+    "RS" -> IbanSpec(22, (0, 3),  None,         3),
+    "ST" -> IbanSpec(25, (0, 8),  None,         8),
+    "SV" -> IbanSpec(28, (0, 4),  None,         4),
+    "TL" -> IbanSpec(23, (0, 3),  None,         3),
+    "TN" -> IbanSpec(24, (0, 2),  None,         2),
+    "VG" -> IbanSpec(24, (0, 4),  None,         4),
+    "XK" -> IbanSpec(20, (0, 2),  None,         2)
   )
 
   private val IbanCandidate   = """^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$""".r
+  private val IbanLikeShort     = """^[A-Z]{2}\d{2}[A-Z0-9]{0,10}$""".r // Too short for valid IBAN but looks like one
   private val SwiftBicRegex   = """^([A-Z]{4})([A-Z]{2})([A-Z0-9]{2})([A-Z0-9]{3})?$""".r
   private val IfscRegex       = """^([A-Z]{4})0([A-Z0-9]{6})$""".r
   private val UkSortAccRegex  = """^(?:SORT\s*CODE\s*[:\-]?\s*)?(\d{2})[\-\s]?(\d{2})[\-\s]?(\d{2})[\s,/\-]+(?:ACC(?:OUNT)?\s*[:\-]?\s*)?(\d{8})$""".r
@@ -61,6 +116,20 @@ final class BankAccountParser {
     val (acct, conf, warnings) =
       if (IbanCandidate.matches(compact) && IbanSpecs.contains(compact.take(2))) {
         parseIban(compact)
+      } else if (IbanLikeShort.matches(compact) && IbanSpecs.contains(compact.take(2))) {
+        // IBAN-like but too short - parse as invalid IBAN
+        val cc = compact.take(2)
+        val parsed = ParsedBankAccount(
+          format = "IBAN",
+          country = Some(cc),
+          normalizedCompact = compact,
+          bankCode = None,
+          branchCode = None,
+          accountNumber = None,
+          checkDigits = if (compact.length >= 4) Some(compact.substring(2, 4)) else None,
+          checksumValid = Some(false)
+        )
+        (parsed, 0.25, List(s"IBAN too short: ${compact.length} chars, minimum 15"))
       } else if (IfscRegex.matches(compact)) {
         parseIfsc(compact)
       } else if (SwiftBicRegex.matches(compact) && !compact.forall(_.isDigit)) {

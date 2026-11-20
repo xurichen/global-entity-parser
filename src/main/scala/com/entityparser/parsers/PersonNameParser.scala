@@ -67,6 +67,12 @@ final class PersonNameParser(
     "sukarno", "soekarno", "suharto", "soeharto", "sudirman", "boediono", "wiranto", "megawati", "hartono", "sutrisno"
   )
 
+  // Korean given name patterns (common syllables)
+  private val KoreanGivenParts: Set[String] = Set(
+    "ki", "moon", "hyun", "jin", "min", "soo", "ji", "woo", "seo", "jun",
+    "ha", "ho", "hye", "in", "su", "yeon", "eun", "yu", "seok", "sung"
+  )
+
   private val PersonSchema: JsObject = JsObject(List(
     "type" -> JsString("object"),
     "properties" -> JsObject(List(
@@ -122,6 +128,8 @@ final class PersonNameParser(
     )
   }
 
+  private def normToken(t: String): String = t.toLowerCase(java.util.Locale.ROOT).replaceAll("[.]", "")
+
   private def parseDeterministic(raw: String, cc: Option[String]): (ParsedPersonName, Double, List[String]) = {
     val tokens = raw.split("\\s+").filter(_.nonEmpty).toList
     if (tokens.isEmpty) {
@@ -157,12 +165,12 @@ final class PersonNameParser(
 
     // 4. Strip honorifics & suffixes for alphabetic names
     val (honOpt, afterHon) =
-      if (tokens.size > 1 && Honorifics.contains(tokens.head.toLowerCase(java.util.Locale.ROOT)))
+      if (tokens.size > 1 && Honorifics.contains(normToken(tokens.head)))
         (Some(tokens.head), tokens.tail)
       else (None, tokens)
 
     val (sufOpt, core) =
-      if (afterHon.size > 1 && NameSuffixes.contains(afterHon.last.toLowerCase(java.util.Locale.ROOT)))
+      if (afterHon.size > 1 && NameSuffixes.contains(normToken(afterHon.last)))
         (Some(afterHon.last), afterHon.init)
       else (None, afterHon)
 
@@ -273,12 +281,66 @@ final class PersonNameParser(
       }
     }
 
-    // 9. Spanish double surnames (3-4 tokens where last 2 are surnames or countryHint is ES/MX/CO/AR)
+    // 9. Korean name in Western order (e.g. Ban Ki-moon) - detect by common Korean given name parts
+    if (cc.contains("KR") || (core.size == 3 && KoreanGivenParts.contains(core(1).toLowerCase(java.util.Locale.ROOT)) && KoreanGivenParts.contains(core(2).toLowerCase(java.util.Locale.ROOT).replace("-", "")))) {
+      return (
+        ParsedPersonName(
+          culture = NameCulture.Korean,
+          honorific = honOpt,
+          familyName = Some(core(0)),
+          givenName = Some(core.drop(1).mkString(" ")),
+          suffix = sufOpt
+        ),
+        0.88,
+        Nil
+      )
+    }
+
+    // 10. Vietnamese name (family-middle-given, 3 tokens, country hint VN or common Vietnamese surnames)
+    val vietnameseSurnames = Set("nguyen", "tran", "le", "pham", "hoang", "huynh", "vu", "vo", "dang", "bui", "do", "ho", "ngo", "duong", "ly")
+    if (cc.contains("VN") || (core.size >= 3 && vietnameseSurnames.contains(core.head.toLowerCase(java.util.Locale.ROOT)))) {
+      return (
+        ParsedPersonName(
+          culture = NameCulture.Western, // Vietnamese uses Western-style parsing but family-first
+          honorific = honOpt,
+          familyName = Some(core.head),
+          givenName = Some(core.tail.mkString(" ")),
+          suffix = sufOpt
+        ),
+        0.85,
+        Nil
+      )
+    }
+
+    // 11. Diaspora Chinese Western order: "Tony Leung Chiu-wai" (English given + Chinese family + Chinese given romanized)
+    val hasChineseGivenPattern = core.size >= 3 && core.tail.exists(t => t.contains("-") && t.split("-").length == 2)
+    if ((cc.contains("HK") || cc.contains("SG") || cc.contains("TW")) && hasChineseGivenPattern) {
+      val eng = core.head
+      val fam = core(1)
+      val chiGiv = core.drop(2).mkString(" ")
+      return (
+        ParsedPersonName(
+          culture = NameCulture.ChineseDiaspora,
+          honorific = honOpt,
+          englishName = Some(eng),
+          familyName = Some(fam),
+          givenName = Some(chiGiv),
+          middleName = None,
+          suffix = sufOpt
+        ),
+        0.90,
+        Nil
+      )
+    }
+
+    // 12. Spanish double surnames (3-4 tokens where last 2 are surnames or countryHint is ES/MX/CO/AR)
+    // Handle "y" particle (e.g. "Ruiz y Picasso")
+    val coreNoY = core.filterNot(t => t.toLowerCase(java.util.Locale.ROOT) == "y")
     val hasSpanishSurname = lowerTokens.takeRight(2).exists(CommonSpanishSurnames.contains)
-    if (core.size >= 3 && (cc.exists(Set("ES", "MX", "CO", "PE", "CL", "AR").contains) || hasSpanishSurname)) {
-      val fam2 = core.last
-      val fam1 = core(core.size - 2)
-      val giv  = core.dropRight(2).mkString(" ")
+    if (coreNoY.size >= 3 && (cc.exists(Set("ES", "MX", "CO", "PE", "CL", "AR").contains) || hasSpanishSurname)) {
+      val fam2 = coreNoY.last
+      val fam1 = coreNoY(coreNoY.size - 2)
+      val giv  = coreNoY.dropRight(2).mkString(" ")
       return (
         ParsedPersonName(
           culture = NameCulture.Spanish,
@@ -293,7 +355,7 @@ final class PersonNameParser(
       )
     }
 
-    // 10. Nobiliary particles (e.g. "van der Berg", "de la Cruz") -> lower confidence if multi-particle
+    // 13. Nobiliary particles (e.g. "van der Berg", "de la Cruz") -> lower confidence if multi-particle
     val particles = Set("van", "von", "der", "den", "de", "la", "del", "di", "da")
     if (core.size >= 3 && core.drop(1).init.exists(t => particles.contains(t.toLowerCase(java.util.Locale.ROOT)))) {
       val pIdx = core.indexWhere(t => particles.contains(t.toLowerCase(java.util.Locale.ROOT)), 1)
@@ -310,14 +372,31 @@ final class PersonNameParser(
       )
     }
 
-    // 11. South Asian patronymic/multi-part flag if country hint is IN/LK
+    // 14. Russian name without Cyrillic (e.g. Anna Karenina) - detect by common Russian surnames
+    val russianSurnames = Set("karenina", "putin", "tolstoy", "dostoevsky", "pushkin", "chekhov", "gorbachev", "yeltsin", "medvedev", "navalny")
+    if (core.size == 2 && russianSurnames.contains(core.last.toLowerCase(java.util.Locale.ROOT))) {
+      return (
+        ParsedPersonName(
+          culture = NameCulture.Russian,
+          honorific = honOpt,
+          givenName = Some(core.head),
+          familyName = Some(core.last),
+          suffix = sufOpt
+        ),
+        0.85,
+        Nil
+      )
+    }
+
+    // 15. South Asian patronymic/multi-part flag if country hint is IN/LK
     if (cc.contains("IN") || cc.contains("LK")) {
       return (
         ParsedPersonName(
           culture = NameCulture.SouthAsian,
           honorific = honOpt,
           givenName = Some(core.head),
-          familyName = Some(core.tail.mkString(" ")),
+          patronymic = Some(core.tail.mkString(" ")),
+          familyName = None,
           flaggedEdgeCase = true
         ),
         0.58,
@@ -325,7 +404,7 @@ final class PersonNameParser(
       )
     }
 
-    // 12. Standard Western name (Given [Middle] Family)
+    // 16. Standard Western name (Given [Middle] Family)
     core match {
       case g :: f :: Nil =>
         (ParsedPersonName(NameCulture.Western, honOpt, givenName = Some(g), familyName = Some(f), suffix = sufOpt), 0.90, Nil)
