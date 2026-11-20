@@ -119,20 +119,26 @@ final class CountryAdjudicator(
               auditId = UUID.randomUUID().toString.take(8)
             ))
           case (_, _, Some("UNKNOWN")) =>
-            // Guardrail 3: Low confidence → UNKNOWN
+            // Guardrail 3 refined: abstention → keep Top-1 (see note below)
+            // Refinement (2026-11-20, measured): an abstention must not discard a
+            // Stage-1 decision. Keep Top-1, flagged with reduced confidence; the
+            // model's UNKNOWN and its raw output remain in the audit trail.
             Some(CountryAdjudication(
-              chosenCountry = None,
-              confidence = confidence,
-              decisiveEvidence = s"Low confidence ($confidence): $decisiveEvidence",
+              chosenCountry = top1.map(_.countryCode),
+              confidence = top1.map(t => math.min(t.score, 0.5)).getOrElse(confidence),
+              decisiveEvidence = s"Model abstained (UNKNOWN/low confidence $confidence); kept Stage-1 Top-1: $decisiveEvidence",
               rawModelOutput = JsonCodec.stringify(jsObj),
               candidateSet = candidateSet,
               auditId = UUID.randomUUID().toString.take(8)
             ))
           case (_, _, Some(_)) if confidence < 0.5 =>
+            // Refinement (2026-11-20, measured): an abstention must not discard a
+            // Stage-1 decision. Keep Top-1, flagged with reduced confidence; the
+            // model's UNKNOWN and its raw output remain in the audit trail.
             Some(CountryAdjudication(
-              chosenCountry = None,
-              confidence = confidence,
-              decisiveEvidence = s"Low confidence ($confidence): $decisiveEvidence",
+              chosenCountry = top1.map(_.countryCode),
+              confidence = top1.map(t => math.min(t.score, 0.5)).getOrElse(confidence),
+              decisiveEvidence = s"Model abstained (UNKNOWN/low confidence $confidence); kept Stage-1 Top-1: $decisiveEvidence",
               rawModelOutput = JsonCodec.stringify(jsObj),
               candidateSet = candidateSet,
               auditId = UUID.randomUUID().toString.take(8)

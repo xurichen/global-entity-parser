@@ -448,3 +448,21 @@ Results on the 24 gated sample (the hardest slice — Stage-1 Top-1 alone: 5/24)
 | No parseable JSON in model output | 9 — fell back to Top-1 unchanged |
 
 Interpretation: the adjudication mechanism works and the model's committed picks were accurate in this sample, but two engineering issues dominate: (1) output discipline — a reasoning model often fails to emit a clean JSON decision (a strict JSON-schema response format should be enforced); (2) over-abstention on thin-evidence inputs (bare account numbers / names), which the spec treats as correct behaviour (UNKNOWN beats a wrong guess) even though this labelled scoring counts it as an error. Projected effect if the sample is representative: overall standalone detection ~49.4% → ~51%. The gate also lets through cases where Top-1 is correct but low-margin (cf. COMP-35); a "do not overturn a Top-1 above score X without hard evidence" rule is a candidate refinement.
+
+---
+
+## 17. Round 6c: Adjudication Refinement + Full Gated-Set Validation (Muse, 2026-11-20)
+
+Refinement implemented in `CountryAdjudicator` (and spec report.md §6.3 / REQUIREMENTS.md §3.6 amended accordingly): **when the model abstains (UNKNOWN or confidence < 0.5), the adjudication keeps the Stage-1 Top-1 with a reduced-confidence flag instead of discarding it** — the model's UNKNOWN and raw output remain in the audit record. Abstention now means "no added signal", never "overrule the rules". Suites unchanged after the change (WebTest 354/387, HardCase 20/20).
+
+Full validation: all **153 gated cases** adjudicated by Nemotron 3 Ultra via OpenRouter with the adjudicator's exact prompts; strict JSON-schema response format requested. Identical model outputs scored under both the old and the refined guardrail logic:
+
+| Gated-set result (n=153) | Correct |
+|--------------------------|---------|
+| Stage-1 Top-1 only | 19 (12.4%) |
+| + adjudication, old logic | 22 (+3) |
+| + adjudication, **refined logic** | **28 (+9 vs Top-1, +6 vs old)** |
+
+Refined logic vs Top-1: **9 fixes, 0 breaks**. The old logic actually broke one PersonName case (7→6) via a harmful abstention; the refinement both removes that failure mode and adds fixes (PersonName gated 7→12). Projected overall standalone detection: 191/387 (49.4%) → **200/387 (51.7%)**.
+
+Caveats, honestly stated: (1) rate limiting — 81/153 cases exhausted both call attempts with HTTP 429, so the model only answered ~47% of cases (68 parseable decisions); the +9 is a lower bound, not the ceiling. (2) BankAccount gated cases (41) scored **0/41 under every logic** — bare account numbers give Stage 1 almost no signal and the true country is often absent from the candidate set entirely; no adjudicator can fix candidate quality. That is now the single biggest lever: Stage-1 signals for bank accounts (and gazetteer growth beyond 8 countries), not adjudication. (3) CompanyName gated cases gained nothing (6→6 of 41).
