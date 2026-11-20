@@ -3,21 +3,20 @@ package com.entityparser.parsers
 import com.entityparser.llm.{LlmBackend, SimulatedGemmaBackend}
 import com.entityparser.llm.{JsObject, JsArray, JsString, JsNumber, JsBoolean, JsonCodec}
 import com.entityparser.model._
-import scala.util.Try
 import java.util.UUID
 
 /**
  * Stage 2: LLM-based adjudication for ambiguous country detection cases.
  *
  * Gate: Only invoked when Stage 1 produces ambiguous results:
- *   - Top-1 minus Top-2 margin < 0.15, OR
- *   - Top-1 score < 0.6
+ *   - Top-1 minus Top-2 margin < 4.0, OR
+ *   - Top-1 score < 7.0
  *   - BUT skipped if hard identifier present and consistent with Top-1
  *
  * Guardrails:
  *   1. Hard identifiers cannot be overturned
  *   2. Model must choose from Stage 1 candidate set
- *   3. Confidence < 0.5 → UNKNOWN
+ *   3. Abstention (UNKNOWN or confidence < 0.5) keeps Stage-1 Top-1 with reduced confidence
  *   4. Full audit trail (input, candidates, evidence, model output, decision)
  */
 final class CountryAdjudicator(
@@ -60,16 +59,24 @@ final class CountryAdjudicator(
     "additionalProperties" -> JsBoolean(false)
   ))
 
+  private def scoreToConfidence(score: Double): Double =
+    if (score <= 0.0) 0.0 else score / (score + 5.0)
+
   /**
    * Adjudicate ambiguous country candidates using LLM.
    * Returns None if gate conditions not met (use Stage 1 result directly).
    */
   def adjudicate(candidates: CountryCandidates): Option[CountryAdjudication] = {
-    // Gate check
-    if (!candidates.needsAdjudication) return None
+    // Gate check: trigger only when Top1.score < 7.0 or margin < 4.0,
+    // and skip when hard identifier is consistent with Top1.
+    val hardConsistent =
+      candidates.hasHardIdentifier && candidates.hardIdentifierCountry == candidates.top1.map(_.countryCode)
+    val shouldAdjudicate =
+      !hardConsistent && (candidates.margin < 4.0 || candidates.top1.exists(_.score < 7.0))
+    if (!shouldAdjudicate) return None
 
     val candidateSet = candidates.candidates.map(_.countryCode)
-    val top1 = candidates.top1
+    val top1         = candidates.top1
 
     // Build evidence summary for LLM
     val evidenceSummary = candidates.candidates.flatMap { c =>
@@ -97,14 +104,16 @@ final class CountryAdjudicator(
          |If you cannot decide with confidence >= 0.5, output "UNKNOWN".
          |""".stripMargin
 
-    val result = if (llm == null) Left("No LLM backend (rules-only mode)") else llm.completeJson(systemPrompt, userPrompt, jsonSchema, maxTokens = 512)
+    val result =
+      if (llm == null) Left("No LLM backend (rules-only mode)")
+      else llm.completeJson(systemPrompt, userPrompt, jsonSchema, maxTokens = 512)
 
     result match {
       case Right(jsObj) =>
-        val countryCodeOpt = jsObj.fieldString("countryCode").filter(_.nonEmpty)
-        val confidence = jsObj.field("confidence").flatMap(_.asOptDouble).getOrElse(0.0)
+        val countryCodeOpt   = jsObj.fieldString("countryCode").filter(_.nonEmpty)
+        val confidence       = jsObj.field("confidence").flatMap(_.asOptDouble).getOrElse(0.0)
         val decisiveEvidence = jsObj.fieldString("decisiveEvidence").getOrElse("")
-        val reasoning = jsObj.fieldString("reasoning").getOrElse("")
+        val reasoning        = jsObj.fieldString("reasoning").getOrElse("")
 
         // Guardrail 1: Hard identifier cannot be overturned
         val finalCountry = (candidates.hasHardIdentifier, candidates.hardIdentifierCountry, countryCodeOpt) match {
@@ -119,13 +128,13 @@ final class CountryAdjudicator(
               auditId = UUID.randomUUID().toString.take(8)
             ))
           case (_, _, Some("UNKNOWN")) =>
-            // Guardrail 3 refined: abstention → keep Top-1 (see note below)
+            // Guardrail 3 refined: abstention → keep Top-1
             // Refinement (2026-11-20, measured): an abstention must not discard a
             // Stage-1 decision. Keep Top-1, flagged with reduced confidence; the
             // model's UNKNOWN and its raw output remain in the audit trail.
             Some(CountryAdjudication(
               chosenCountry = top1.map(_.countryCode),
-              confidence = top1.map(t => math.min(t.score, 0.5)).getOrElse(confidence),
+              confidence = top1.map(t => scoreToConfidence(t.score)).getOrElse(confidence),
               decisiveEvidence = s"Model abstained (UNKNOWN/low confidence $confidence); kept Stage-1 Top-1: $decisiveEvidence",
               rawModelOutput = JsonCodec.stringify(jsObj),
               candidateSet = candidateSet,
@@ -137,7 +146,7 @@ final class CountryAdjudicator(
             // model's UNKNOWN and its raw output remain in the audit trail.
             Some(CountryAdjudication(
               chosenCountry = top1.map(_.countryCode),
-              confidence = top1.map(t => math.min(t.score, 0.5)).getOrElse(confidence),
+              confidence = top1.map(t => scoreToConfidence(t.score)).getOrElse(confidence),
               decisiveEvidence = s"Model abstained (UNKNOWN/low confidence $confidence); kept Stage-1 Top-1: $decisiveEvidence",
               rawModelOutput = JsonCodec.stringify(jsObj),
               candidateSet = candidateSet,
@@ -158,7 +167,7 @@ final class CountryAdjudicator(
             top1.map { t1 =>
               CountryAdjudication(
                 chosenCountry = Some(t1.countryCode),
-                confidence = math.min(t1.score, 0.5),
+                confidence = scoreToConfidence(t1.score),
                 decisiveEvidence = s"Model output invalid/outside candidates; fell back to top-1: ${t1.countryCode}",
                 rawModelOutput = JsonCodec.stringify(jsObj),
                 candidateSet = candidateSet,
@@ -173,7 +182,7 @@ final class CountryAdjudicator(
         top1.map { t1 =>
           CountryAdjudication(
             chosenCountry = Some(t1.countryCode),
-            confidence = math.min(t1.score, 0.5),
+            confidence = scoreToConfidence(t1.score),
             decisiveEvidence = s"LLM adjudication failed ($err); fell back to top-1",
             rawModelOutput = s"ERROR: $err",
             candidateSet = candidateSet,

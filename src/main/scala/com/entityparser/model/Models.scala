@@ -164,7 +164,7 @@ final case class EntityClassification(
 
 /**
  * Evidence item for a country candidate in Stage 1 extraction.
- * Each signal type contributes to the candidate's score.
+ * Each signal type contributes to the candidate's uncapped score using tiered weights.
  */
 sealed trait CountryEvidence {
   def signalType: String
@@ -173,67 +173,74 @@ sealed trait CountryEvidence {
 }
 object CountryEvidence {
   final case class HardIdentifier(countryCode: String, identifierType: String, value: String) extends CountryEvidence {
-    val signalType = "hard_identifier"
+    val signalType  = "hard_identifier"
     val description = s"$identifierType: $value"
-    val weight = 1.0
+    val weight      = 10.0
   }
   final case class ScriptLanguage(script: String, language: Option[String], countryCode: String) extends CountryEvidence {
-    val signalType = "script_language"
+    val signalType  = "script_language"
     val description = s"Script: $script${language.map(l => s", Lang: $l").getOrElse("")}"
-    val weight = 0.6
+    val weight      = 3.0
   }
   final case class PostcodeFormat(countryCode: String, postcode: String) extends CountryEvidence {
-    val signalType = "postcode_format"
+    val signalType  = "postcode_format"
     val description = s"Postcode format matches $countryCode: $postcode"
-    val weight = 0.5
+    val weight      = 5.0
   }
   final case class LegalFormHit(countryCode: String, legalForm: String, position: String) extends CountryEvidence {
-    val signalType = "legal_form"
+    val signalType  = "legal_form"
     val description = s"Legal form '$legalForm' ($position) matches $countryCode"
-    val weight = 0.5
+    val weight      = 4.0
   }
   final case class SurnameHit(countryCode: String, surname: String, culture: String) extends CountryEvidence {
-    val signalType = "surname"
+    val signalType  = "surname"
     val description = s"Surname '$surname' ($culture) matches $countryCode"
-    val weight = 0.4
+    val weight      = 2.0
   }
-  final case class GazetteerHit(countryCode: String, placeName: String, adminPath: String, matchedKey: String) extends CountryEvidence {
-    val signalType = "gazetteer"
-    val description = s"Place '$placeName' found in $countryCode ($adminPath)"
-    val weight = 0.7
+  final case class GazetteerHit(
+    countryCode: String,
+    placeName: String,
+    adminPath: String,
+    matchedKey: String,
+    weightOverride: Option[Double] = None
+  ) extends CountryEvidence {
+    val signalType     = "gazetteer"
+    val description    = s"Place '$placeName' found in $countryCode ($adminPath)"
+    val weight: Double = weightOverride.getOrElse(2.0)
   }
   final case class PhoneCountryCode(countryCode: String, phoneCode: String) extends CountryEvidence {
-    val signalType = "phone_country_code"
+    val signalType  = "phone_country_code"
     val description = s"Phone country code $phoneCode matches $countryCode"
-    val weight = 0.8
+    val weight      = 8.0
   }
   final case class CcTLD(countryCode: String, domain: String) extends CountryEvidence {
-    val signalType = "cctld"
+    val signalType  = "cctld"
     val description = s"ccTLD .$domain matches $countryCode"
-    val weight = 0.7
+    val weight      = 5.0
   }
   final case class ExplicitHint(countryCode: String, source: String) extends CountryEvidence {
-    val signalType = "explicit_hint"
+    val signalType  = "explicit_hint"
     val description = s"Explicit hint from $source: $countryCode"
-    val weight = 0.9
+    val weight      = 9.0
   }
 }
 
 /**
- * A single country candidate with its aggregated score and evidence.
+ * A single country candidate with its aggregated raw score and evidence.
  */
 final case class CountryCandidate(
   countryCode: String,
   score: Double,
   evidence: List[CountryEvidence]
 ) {
-  def primaryEvidence: List[CountryEvidence] = evidence.filter(_.weight >= 0.5)
+  def primaryEvidence: List[CountryEvidence] = evidence.filter(_.weight >= 2.0)
   def hasHardIdentifier: Boolean = evidence.exists(_.signalType == "hard_identifier")
-  def hardIdentifierCountry: Option[String] = evidence.find(_.signalType == "hard_identifier").map(_.asInstanceOf[CountryEvidence.HardIdentifier].countryCode)
+  def hardIdentifierCountry: Option[String] =
+    evidence.find(_.signalType == "hard_identifier").map(_.asInstanceOf[CountryEvidence.HardIdentifier].countryCode)
 }
 
 /**
- * Result of Stage 1 candidate extraction: Top 3-5 candidates with scores and evidence.
+ * Result of Stage 1 candidate extraction: Top 3-5 candidates with raw scores and evidence.
  */
 final case class CountryCandidates(
   candidates: List[CountryCandidate],
@@ -245,14 +252,14 @@ final case class CountryCandidates(
   def top2: Option[CountryCandidate] = candidates.lift(1)
   def margin: Double = (top1, top2) match {
     case (Some(t1), Some(t2)) => t1.score - t2.score
-    case (Some(t1), None) => 1.0
-    case _ => 0.0
+    case (Some(t1), None)     => t1.score
+    case _                    => 0.0
   }
   def needsAdjudication: Boolean = {
-    // Gate: Top1-Top2 margin < 0.15 OR Top1 score < 0.6
-    // But skip if hard identifier is present and consistent
+    // Gate: Top1-Top2 margin < 4.0 OR Top1 score < 7.0
+    // But skip if hard identifier is present and consistent with Top1
     if (hasHardIdentifier && hardIdentifierCountry == top1.map(_.countryCode)) false
-    else margin < 0.15 || top1.exists(_.score < 0.6)
+    else margin < 4.0 || top1.exists(_.score < 7.0)
   }
 }
 

@@ -481,3 +481,18 @@ Verified results (Muse's own compile + runs, 2026-11-20):
 - CountryDetectionEvaluation: standalone detection **215/387 = 55.6%** (was 49.4%). This gain comes from the spaced-IBAN `IbanPattern` fix already present in the work copy (verified this round, not a Gemini change): BankAccount standalone detection 42/71 = 59.2% (was 25.4%). The eval's cosmetic ratio-formatting bug (prints e.g. "0.6%" for 59.2% in detail lines) is still present; summary-table percentages are correct.
 
 Remaining failures (19): 17 BankAccount (local formats + invalid-check-digit test IBANs) and 2 by-design PersonName deferrals.
+
+## 19. Round 8: Stage-1 Upgrade per Gemini's Design (Reviewer-Verified & Salvaged, Muse 2026-11-20)
+
+Design: Gemini Neon's own proposal from an unprompted design consultation (global gazetteer as weighted retrieval evidence, tiered uncapped scoring, dual-track normalization), merged with xuri's retrieval-side idea (strip generic tokens before dictionary lookup). Data prepared by Muse: GeoNames admin1CodesASCII (3,865) + cities15000 (34,248) compacted into `src/main/resources/geonames.tsv` (38,113 records, 2.3 MB, with population). Implementation by Gemini Task mode (5 files: GeoGazetteer, CountryDetector, CountryAdjudicator, Models, Normalizer).
+
+Changes: CityRecord gains `population`; `GeoGazetteer.default` loads /geonames.tsv from the classpath and merges it with the embedded gazetteer; gazetteer evidence weight = base (city 2.0 / admin1 4.0) × population factor × ambiguity penalty 1/log2(1+K); city+own-admin1 co-occurrence bonus +3.0; generic-token skip list before lookup; evidence weights rescaled to tiers (HardId 10 … Surname 2); max-normalization removed (raw additive scores); adjudicator gate on the new scale (Top1 < 7.0 or margin < 4.0), audit confidence = score/(score+5); Arabic letter normalization in keyToken; no Traditional→Simplified conversion.
+
+Verified results (Muse's own compile + runs, after salvage below):
+- WebTestEvaluation: **368/387 (95.1%)** — failure set identical to round 7, zero regressions.
+- CountryDetectionEvaluation: standalone detection **222/387 = 57.4%**, up from 215/387 (55.6%). Groups: AR 74.3% (was 37.1%), PT/BR 47.8% (was 34.8%), EN 47.1% (was 45.6%), ES-group 42.9% (was 38.1%), ID/MY 91.9% (unchanged), **CN-group 55.7% (was 60.7% — a real ~3-case slip inside detection, to investigate)**. Gemini's consultation estimate of "75%+" was not met; the gain is real but modest (+7).
+- HardCaseEvaluation: exit 0, core 20/20, hard cases unchanged (6/10, 9/10).
+
+Regression & salvage (Muse): as first delivered, WebTest dropped to 364/387 — ADDR-24/25/28/49 broke. Root cause was NOT the scoring code (R8 code with embedded-only data scores 368): the global data made `GeoGazetteer.validate()` resolve cities/admins it never could before, and its canonical substitutions overwrote correct parser output (parser "VIC" → canonical "Victoria"; parser "Makati" → "Makati City"). A first salvage attempt (parser-value-first precedence in AddressParser) traded the 4 failures for 4 different ones (ADDR-05/06/15/26 depend on canonical substitution translating 广东省→Guangdong, 東京都→Tokyo, VA→virginia). Final fix: validate() now canonicalizes against a **validation view** restricted to the curated embedded gazetteer, while the merged global data serves candidate evidence (lookupPlace) only. GeoNames data is not curated enough for canonical substitution (numeric FIPS admin1 codes for AU/CA, "Makati City"-style names). The AddressParser precedence flip was reverted.
+
+Next candidates: Tier-2 in-language discriminator tables (Gemini's design §2) for the low groups (ES 42.9%, EN 47.1%), and a look at why the CN group slipped under uncapped scoring.

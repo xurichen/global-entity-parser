@@ -33,10 +33,44 @@ object EntityNormalizer {
     stripped.toLowerCase(java.util.Locale.ROOT)
   }
 
-  /** Clean token string for matching keys: lowercase, strip punctuation, collapse spaces. */
+  /**
+   * Normalize Arabic script variants:
+   * - أ إ آ ٱ -> ا
+   * - ة -> ه
+   * - ى -> ي
+   * - strip tatweel (ـ, U+0640) and Arabic vowel diacritics (U+064B–U+0652)
+   */
+  private def normalizeArabic(s: String): String = {
+    var hasArabic = false
+    var i = 0
+    while (i < s.length && !hasArabic) {
+      val c = s.charAt(i)
+      if (c >= '\u0622' && c <= '\u0671') hasArabic = true
+      i += 1
+    }
+    if (!hasArabic) return s
+
+    val sb = new StringBuilder(s.length)
+    i = 0
+    while (i < s.length) {
+      s.charAt(i) match {
+        case '\u0623' | '\u0625' | '\u0622' | '\u0671' => sb.append('\u0627') // أ إ آ ٱ -> ا
+        case '\u0629' => sb.append('\u0647') // ة -> ه
+        case '\u0649' => sb.append('\u064A') // ى -> ي
+        case '\u0640' => ()                  // strip tatweel ـ
+        case c if c >= '\u064B' && c <= '\u0652' => () // strip Arabic vowels U+064B-U+0652
+        case c => sb.append(c)
+      }
+      i += 1
+    }
+    sb.toString()
+  }
+
+  /** Clean token string for matching keys: Arabic normalization, lowercase, strip punctuation, collapse spaces. */
   def keyToken(s: String, germanUmlautExpand: Boolean = false): String = {
-    val folded  = foldLatin(s, germanUmlautExpand)
-    val cleaned = NonAlphaNum.replaceAllIn(folded, " ")
+    val arabicNorm = normalizeArabic(unicodeNormalize(s))
+    val folded     = foldLatin(arabicNorm, germanUmlautExpand)
+    val cleaned    = NonAlphaNum.replaceAllIn(folded, " ")
     MultiSpace.replaceAllIn(cleaned.trim, " ")
   }
 

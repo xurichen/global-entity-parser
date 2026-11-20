@@ -10,18 +10,18 @@ import com.entityparser.norm.EntityNormalizer
  * and geographic anchors before dispatching to country-specific parsers.
  *
  * Also provides Stage 1 RAG-style candidate extraction: deterministic signals
- * + reverse-index gazetteer evidence → CountryCandidates (Top 3-5 with scores and evidence).
+ * + weighted global reverse-index gazetteer evidence → CountryCandidates (Top 5 raw scores).
  */
 object CountryDetector {
 
-  private val HasHan      = ".*\\p{InCJK_Unified_Ideographs}.*".r
-  private val HasHiragana = ".*\\p{InHiragana}.*".r
-  private val HasKatakana = ".*\\p{InKatakana}.*".r
-  private val HasHangul   = ".*\\p{InHangul_Syllables}.*".r
-  private val HasCyrillic = ".*\\p{InCyrillic}.*".r
-  private val HasArabic   = ".*\\p{InArabic}.*".r
+  private val HasHan        = ".*\\p{InCJK_Unified_Ideographs}.*".r
+  private val HasHiragana   = ".*\\p{InHiragana}.*".r
+  private val HasKatakana   = ".*\\p{InKatakana}.*".r
+  private val HasHangul     = ".*\\p{InHangul_Syllables}.*".r
+  private val HasCyrillic   = ".*\\p{InCyrillic}.*".r
+  private val HasArabic     = ".*\\p{InArabic}.*".r
   private val HasDevanagari = ".*\\p{InDevanagari}.*".r
-  private val HasThai     = ".*\\p{InThai}.*".r
+  private val HasThai       = ".*\\p{InThai}.*".r
 
   private val UsStateZip  = """\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\s+\d{5}(-\d{4})?\b""".r
   private val UkPostcode  = """\b[A-Z]{1,2}\d[A-Z\d]?\s+\d[A-Z]{2}\b""".r
@@ -93,12 +93,21 @@ object CountryDetector {
   // --- Hard identifier patterns ---
   // Matches both compact IBANs (DE89370400440532013000) and the standard
   // printed spaced form in groups of 4 (DE89 3704 0044 0532 0130 00).
-  // Previously the spaced form never matched, so the IBAN country code
-  // (a hard identifier) was missed for every spaced IBAN.
-  private val IbanPattern = """\b([A-Z]{2})\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?\b""".r
-  private val BicPattern  = """\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?\b""".r
+  private val IbanPattern  = """\b([A-Z]{2})\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?\b""".r
+  private val BicPattern   = """\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?\b""".r
   private val PhonePattern = """\+(\d{1,3})\s*\d""".r
   private val CctldPattern = """\b[a-z0-9-]+\.([a-z]{2})\b""".r
+
+  // --- Generic address/admin stopwords skipped before gazetteer lookup ---
+  private val GenericPlaceStopwords: Set[String] = Set(
+    "street", "st", "road", "rd", "avenue", "ave", "boulevard", "blvd",
+    "lane", "ln", "drive", "dr", "city", "town", "village", "province",
+    "state", "district", "county", "street.", "rue", "calle", "avenida",
+    "avenida.", "strada", "strasse", "straße", "plaza", "square", "road.",
+    "省", "市", "区", "县", "镇", "村", "街道"
+  )
+
+  private val Log2 = math.log(2.0)
 
   // --- Legal form patterns (subset for country signals) ---
   private val LegalFormPatterns: Map[String, List[(String, String)]] = Map(
@@ -216,14 +225,14 @@ object CountryDetector {
 
   // --- Script/Language to country map ---
   private val ScriptToCountries: Map[String, List[String]] = Map(
-    "hiragana" -> List("JP"),
-    "katakana" -> List("JP"),
-    "hangul"   -> List("KR"),
-    "cyrillic" -> List("RU", "UA", "BY", "KZ", "BG", "RS", "MK"),
-    "arabic"   -> List("SA", "AE", "EG", "MA", "DZ", "TN", "LY", "IQ", "SY", "JO", "LB", "PS", "KW", "QA", "BH", "OM", "YE"),
-    "devanagari" -> List("IN", "NP"),
-    "thai"     -> List("TH"),
-    "han_simplified" -> List("CN", "SG", "MY"),
+    "hiragana"        -> List("JP"),
+    "katakana"        -> List("JP"),
+    "hangul"          -> List("KR"),
+    "cyrillic"        -> List("RU", "UA", "BY", "KZ", "BG", "RS", "MK"),
+    "arabic"          -> List("SA", "AE", "EG", "MA", "DZ", "TN", "LY", "IQ", "SY", "JO", "LB", "PS", "KW", "QA", "BH", "OM", "YE"),
+    "devanagari"      -> List("IN", "NP"),
+    "thai"            -> List("TH"),
+    "han_simplified"  -> List("CN", "SG", "MY"),
     "han_traditional" -> List("TW", "HK", "MO")
   )
 
@@ -264,17 +273,46 @@ object CountryDetector {
   }
 
   // ========================================================================
-  // Stage 1: RAG Candidate Extraction
+  // Stage 1: RAG Candidate Extraction (Weighted Evidence + Uncapped Scoring)
   // ========================================================================
+
+  private def isPureLatin(s: String): Boolean =
+    s.nonEmpty && s.forall { c =>
+      (c >= 'A' && c <= 'Z') ||
+      (c >= 'a' && c <= 'z') ||
+      (c >= '\u00C0' && c <= '\u024F')
+    }
+
+  private def shouldSkipPlaceToken(token: String): Boolean = {
+    val t = token.trim
+    if (t.isEmpty) return true
+    val lower = t.toLowerCase(java.util.Locale.ROOT)
+    if (GenericPlaceStopwords.contains(lower)) return true
+    if (isPureLatin(t) && t.length < 3) return true
+    val letters = t.filter(_.isLetter)
+    if (letters.isEmpty) return true
+    if (isPureLatin(letters) && letters.length < 3) return true
+    false
+  }
+
+  private def computeGazetteerWeight(ev: PlaceEvidence): Double = {
+    val base = if (ev.isAdmin1) 4.0 else 2.0
+    val popFactor =
+      if (ev.population <= 0L) 1.0
+      else 1.0 + math.min(1.5, math.max(0.0, math.log10(ev.population.toDouble + 1.0) - 4.0))
+    val k          = math.max(1, ev.countryAmbiguity)
+    val ambPenalty = 1.0 / (math.log(1.0 + k.toDouble) / Log2)
+    base * popFactor * ambPenalty
+  }
 
   /**
    * Extract country candidates with evidence from deterministic signals +
-   * reverse-index gazetteer lookup.
-   * Returns Top 3-5 candidates with normalized scores and evidence.
+   * weighted reverse-index gazetteer lookup.
+   * Returns Top 5 candidates sorted by raw accumulated score descending (uncapped).
    */
   def extractCandidates(text: String, gazetteer: GeoGazetteer, explicitHint: Option[String] = None): CountryCandidates = {
-    val s = text.trim
-    val lower = s.toLowerCase(java.util.Locale.ROOT)
+    val s          = text.trim
+    val lower      = s.toLowerCase(java.util.Locale.ROOT)
     val candidates = scala.collection.mutable.Map[String, (Double, List[CountryEvidence])]()
 
     def addEvidence(cc: String, evidence: CountryEvidence): Unit = {
@@ -282,17 +320,14 @@ object CountryDetector {
       candidates(cc) = (score + evidence.weight, evidence :: evs)
     }
 
-    // 1. Explicit hint (highest weight among non-hard signals)
+    // 1. Explicit hint
     explicitHint.foreach { h =>
       val cc = h.trim.toUpperCase(java.util.Locale.ROOT)
       if (cc.length == 2) addEvidence(cc, CountryEvidence.ExplicitHint(cc, "user_hint"))
     }
 
-    // 2. Hard identifiers (IBAN, BIC, phone, ccTLD) - weight 1.0 (but handled specially)
-    // IBAN country code. Spans are kept so later, weaker signals (e.g. postcode
-    // formats) are not extracted from inside an IBAN: a spaced IBAN's digit
-    // groups would otherwise each match bare 4-digit postcode patterns and
-    // outvote the hard identifier.
+    // 2. Hard identifiers (IBAN, BIC, phone, ccTLD)
+    // Spans are kept so weaker signals (e.g. postcode formats) are not extracted from inside an IBAN.
     val ibanMatches = IbanPattern.findAllMatchIn(s).toList
     ibanMatches.foreach { m =>
       val cc = m.group(1).toUpperCase(java.util.Locale.ROOT)
@@ -350,7 +385,6 @@ object CountryDetector {
       addEvidence("TH", CountryEvidence.ScriptLanguage("thai", Some("Thai"), "TH"))
     }
     if (HasHan.matches(s)) {
-      // Distinguish simplified vs traditional by checking for HK/MO/TW markers
       val hasHkMoTw = HkAnchor.findFirstIn(s).isDefined || MoAnchor.findFirstIn(s).isDefined || TwAnchor.findFirstIn(s).isDefined
       val hasSimplifiedMarkers = CnAnchor.findFirstIn(s).isDefined || lower.contains("china") || lower.contains("beijing") || lower.contains("shanghai")
       if (hasHkMoTw) {
@@ -361,7 +395,6 @@ object CountryDetector {
         addEvidence("CN", CountryEvidence.ScriptLanguage("han_simplified", Some("Mandarin"), "CN"))
         addEvidence("SG", CountryEvidence.ScriptLanguage("han_simplified", Some("Mandarin"), "SG"))
       } else {
-        // Mixed Latin + Han - likely diaspora
         addEvidence("HK", CountryEvidence.ScriptLanguage("han_traditional", Some("Cantonese/English"), "HK"))
         addEvidence("SG", CountryEvidence.ScriptLanguage("han_simplified", Some("Mandarin/English"), "SG"))
         addEvidence("TW", CountryEvidence.ScriptLanguage("han_traditional", Some("Mandarin"), "TW"))
@@ -389,7 +422,6 @@ object CountryDetector {
     // 6. Surname dictionary hits
     SurnamePatterns.foreach { case (cc, surnames) =>
       surnames.foreach { case (surname, culture) =>
-        // Match surname as whole word or at start of Chinese name
         val pattern = if (culture == "chinese" || culture == "japanese" || culture == "korean") {
           s"$surname"
         } else {
@@ -401,8 +433,7 @@ object CountryDetector {
       }
     }
 
-    // 7. Geographic anchor patterns (existing detectCountry logic converted to evidence)
-    // These are lower-weight contextual signals
+    // 7. Geographic anchor patterns
     val geoAnchors: List[(String, String, Double)] = List(
       ("VN", "VN", if (VnAnchor.findFirstIn(s).isDefined) 0.5 else 0.0),
       ("ID", "ID", if (IdAnchor.findFirstIn(s).isDefined) 0.5 else 0.0),
@@ -470,28 +501,86 @@ object CountryDetector {
       if (weight > 0) addEvidence(cc, CountryEvidence.ExplicitHint(cc, s"geo_anchor_$cc"))
     }
 
-    // 8. Gazetteer reverse lookup (place name -> candidate countries)
-    // Extract potential place name tokens from text
-    val tokens = extractPlaceTokens(s)
-    tokens.foreach { token =>
-      val matches = gazetteer.lookupPlace(token)
-      matches.foreach { evidence =>
-        val cc = evidence.city.countryCode
-        val adminPath = s"${evidence.city.admin1Code}/${evidence.city.canonicalName}"
-        addEvidence(cc, CountryEvidence.GazetteerHit(cc, evidence.city.canonicalName, adminPath, evidence.matchedKey))
+    // 8. Weighted gazetteer reverse lookup with stopword filtering + city/admin1 co-occurrence
+    val allPlaceHits = collectPlaceEvidence(s, gazetteer)
+
+    // Deduplicate scoring hits by (countryCode, canonicalName, isAdmin1) and by (matchedKey, countryCode, isAdmin1),
+    // keeping the highest-weight hit so same-named towns in one country or alias variants don't double-count.
+    val bestByPlace = scala.collection.mutable.LinkedHashMap.empty[(String, String, Boolean), (PlaceEvidence, Double)]
+    val bestByKey   = scala.collection.mutable.HashMap.empty[(String, String, Boolean), (PlaceEvidence, Double)]
+
+    allPlaceHits.foreach { ev =>
+      val w        = computeGazetteerWeight(ev)
+      val cc       = ev.city.countryCode
+      val keyTuple = (ev.matchedKey, cc, ev.isAdmin1)
+      bestByKey.get(keyTuple) match {
+        case Some((_, prevW)) if prevW >= w => ()
+        case _                              => bestByKey.put(keyTuple, (ev, w))
       }
     }
 
-    // Normalize scores to 0-1 range and sort
-    val maxScore = candidates.values.map(_._1).maxOption.getOrElse(1.0)
-    val normalized = candidates.map { case (cc, (score, evs)) =>
-      CountryCandidate(cc, if (maxScore > 0) score / maxScore else 0.0, evs.reverse)
+    bestByKey.values.foreach { case (ev, w) =>
+      val cc         = ev.city.countryCode
+      val placeTuple = (cc, ev.city.canonicalName.toLowerCase(java.util.Locale.ROOT), ev.isAdmin1)
+      bestByPlace.get(placeTuple) match {
+        case Some((_, prevW)) if prevW >= w => ()
+        case _                              => bestByPlace.put(placeTuple, (ev, w))
+      }
+    }
+
+    bestByPlace.values.foreach { case (ev, w) =>
+      val cc        = ev.city.countryCode
+      val kind      = if (ev.isAdmin1) "admin1" else "city"
+      val adminPath = s"$kind:${ev.city.admin1Code}/${ev.city.canonicalName}"
+      addEvidence(
+        cc,
+        CountryEvidence.GazetteerHit(
+          countryCode = cc,
+          placeName = ev.city.canonicalName,
+          adminPath = adminPath,
+          matchedKey = ev.matchedKey,
+          weightOverride = Some(w)
+        )
+      )
+    }
+
+    // Co-occurrence bonus: if a city hit and its matching (countryCode, admin1Code) admin1 hit
+    // both appear in the same text (from distinct matchedKeys), award +3.0 once per country.
+    val admin1HitsByKey = allPlaceHits
+      .filter(ev => ev.isAdmin1 && ev.city.admin1Code.nonEmpty)
+      .groupBy(ev => (ev.city.countryCode, ev.city.admin1Code))
+
+    val coOccurrenceAwarded = scala.collection.mutable.HashSet.empty[String]
+    allPlaceHits.foreach { cityEv =>
+      val cc = cityEv.city.countryCode
+      if (!cityEv.isAdmin1 && cityEv.city.admin1Code.nonEmpty && !coOccurrenceAwarded.contains(cc)) {
+        admin1HitsByKey.get((cc, cityEv.city.admin1Code)).foreach { adminHits =>
+          adminHits.find(_.matchedKey != cityEv.matchedKey).foreach { adminEv =>
+            coOccurrenceAwarded += cc
+            addEvidence(
+              cc,
+              CountryEvidence.GazetteerHit(
+                countryCode = cc,
+                placeName = cityEv.city.canonicalName,
+                adminPath = s"co-occurrence: ${cityEv.city.admin1Code}/${cityEv.city.canonicalName} + ${adminEv.city.canonicalName}",
+                matchedKey = s"${cityEv.matchedKey}+${adminEv.matchedKey}",
+                weightOverride = Some(3.0)
+              )
+            )
+          }
+        }
+      }
+    }
+
+    // Keep raw accumulated scores (no maxScore normalization), sort descending, take Top 5.
+    val ranked = candidates.map { case (cc, (score, evs)) =>
+      CountryCandidate(cc, score, evs.reverse)
     }.toList.sortBy(-_.score).take(5)
 
-    val hasHardId = normalized.exists(_.hasHardIdentifier)
-    val hardIdCountry = normalized.find(_.hasHardIdentifier).flatMap(_.hardIdentifierCountry)
+    val hasHardId     = ranked.exists(_.hasHardIdentifier)
+    val hardIdCountry = ranked.find(_.hasHardIdentifier).flatMap(_.hardIdentifierCountry)
 
-    CountryCandidates(normalized, s, hasHardId, hardIdCountry)
+    CountryCandidates(ranked, s, hasHardId, hardIdCountry)
   }
 
   private val postcodePatterns: Map[String, scala.util.matching.Regex] = Map(
@@ -524,84 +613,83 @@ object CountryDetector {
     "CL" -> """\b\d{7}\b""".r
   )
 
+  private val SegmentSplitRegex = """[,;/\n|()（）【】]+""".r
+  private val CjkAdminRegex     = """([^\p{P}\s\d省市区區县縣州都道府県]{1,5})(特别行政区|特別行政區|自治区|自治區|특별자치도|특별시|광역시|省|市|区|區|县|縣|州|都|道|府|県|도|군|구)""".r
+
+  private def hasCjk(s: String): Boolean =
+    s.exists { c =>
+      val b = Character.UnicodeBlock.of(c)
+      b == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS ||
+      b == Character.UnicodeBlock.HIRAGANA ||
+      b == Character.UnicodeBlock.KATAKANA ||
+      b == Character.UnicodeBlock.HANGUL_SYLLABLES
+    }
+
   /**
-   * Extract potential place name tokens from text for gazetteer lookup.
-   * Uses simple heuristics: capitalized words, known admin suffixes, etc.
+   * Extract place tokens from text across scripts, apply stopword & length filtering,
+   * and retrieve matching PlaceEvidence from the global gazetteer.
+   * Uses greedy longest-match (3 -> 2 -> 1 word n-grams) within each punctuation-delimited
+   * segment so multi-word place names (e.g. "San Francisco", "Dar es Salaam") don't emit
+   * noisy sub-token matches.
    */
-  private def extractPlaceTokens(text: String): List[String] = {
-    val tokens = scala.collection.mutable.Set[String]()
+  private def collectPlaceEvidence(text: String, gazetteer: GeoGazetteer): List[PlaceEvidence] = {
+    val results     = scala.collection.mutable.ListBuffer.empty[PlaceEvidence]
+    val queriedKeys = scala.collection.mutable.HashSet.empty[String]
 
-    // Chinese administrative divisions
-    "(省|市|区|县|州|自治区|特别行政区)".r.findAllMatchIn(text).foreach { m =>
-      val start = math.max(0, m.start - 6)
-      val end = m.end
-      tokens += text.substring(start, end).trim
+    def queryToken(raw: String): List[PlaceEvidence] = {
+      val trimmed = raw.trim
+      if (shouldSkipPlaceToken(trimmed)) return Nil
+      val norm = EntityNormalizer.keyToken(trimmed, germanUmlautExpand = false)
+      if (norm.isEmpty || queriedKeys.contains(norm)) return Nil
+      val hits = gazetteer.lookupPlace(trimmed)
+      if (hits.nonEmpty) queriedKeys += norm
+      hits
     }
 
-    // Japanese prefectures
-    "(都|道|府|県)".r.findAllMatchIn(text).foreach { m =>
-      val start = math.max(0, m.start - 4)
-      val end = m.end
-      tokens += text.substring(start, end).trim
-    }
+    val segments = SegmentSplitRegex.split(text).map(_.trim).filter(_.nonEmpty)
 
-    // Korean provinces
-    "(특별시|광역시|도|시|군|구)".r.findAllMatchIn(text).foreach { m =>
-      val start = math.max(0, m.start - 4)
-      val end = m.end
-      tokens += text.substring(start, end).trim
-    }
+    segments.foreach { seg =>
+      // 1. CJK administrative suffix & prefix extraction
+      if (hasCjk(seg)) {
+        CjkAdminRegex.findAllMatchIn(seg).foreach { m =>
+          val stem   = m.group(1).trim
+          val suffix = m.group(2).trim
+          val full   = stem + suffix
+          val fullHits = queryToken(full)
+          results ++= fullHits
+          if (stem.length >= 2) {
+            val stemHits = queryToken(stem)
+            results ++= stemHits
+          }
+        }
+        val cjkRun = seg.filter(c => Character.UnicodeBlock.of(c) == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS || Character.UnicodeBlock.of(c) == Character.UnicodeBlock.HANGUL_SYLLABLES)
+        if (cjkRun.length >= 2 && cjkRun.length <= 6) {
+          results ++= queryToken(cjkRun)
+        } else if (cjkRun.length > 6) {
+          results ++= queryToken(cjkRun.take(2))
+        }
+      }
 
-    // Latin script: Capitalized words that could be place names
-    // Look for patterns like "City, State" or "Street, City"
-    "([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*)\\s*,\\s*([A-Z][a-z]+)".r.findAllMatchIn(text).foreach { m =>
-      tokens += m.group(1).trim
-      tokens += m.group(2).trim
-    }
-    "([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*)\\s+[A-Z]{2}\\s+\\d{5}".r.findAllMatchIn(text).foreach { m =>
-      tokens += m.group(1).trim
-    }
-
-    // Common city names in Latin script (from gazetteer coverage)
-    val knownCities = Set(
-      "Beijing", "Shanghai", "Guangzhou", "Shenzhen", "Hangzhou", "Nanjing", "Suzhou", "Chengdu",
-      "San Francisco", "Los Angeles", "New York", "Mountain View", "Seattle", "Chicago",
-      "Arlington", "Alexandria", "Baltimore", "Atlanta", "Miami", "Charlotte", "Nashville",
-      "Denver", "Phoenix", "Boston", "Newark", "Philadelphia", "Columbus", "Detroit",
-      "Indianapolis", "Kansas City", "Milwaukee", "Minneapolis",
-      "Berlin", "Munich", "Muenchen", "Cologne", "Koeln", "Hamburg",
-      "Tokyo", "Shibuya", "Osaka",
-      "London", "Manchester", "Birmingham", "York",
-      "Paris", "Lyon", "Marseille",
-      "Madrid", "Barcelona",
-      "Rome", "Milan", "Milano",
-      "Amsterdam", "Rotterdam",
-      "Brussels", "Antwerp",
-      "Zurich", "Geneva",
-      "Vienna", "Wien",
-      "Stockholm", "Oslo", "Copenhagen", "Helsinki",
-      "Warsaw", "Prague", "Budapest", "Bucharest",
-      "Istanbul", "Ankara",
-      "Moscow", "Kyiv", "Minsk", "Almaty",
-      "Tel Aviv", "Jerusalem",
-      "Dubai", "Abu Dhabi", "Riyadh", "Jeddah", "Doha", "Kuwait City",
-      "Cairo", "Casablanca", "Rabat",
-      "Lagos", "Abuja", "Nairobi",
-      "Johannesburg", "Cape Town",
-      "Sao Paulo", "Rio de Janeiro",
-      "Buenos Aires", "Santiago", "Bogota", "Lima", "Mexico City",
-      "Toronto", "Vancouver", "Montreal",
-      "Sydney", "Melbourne", "Brisbane",
-      "Auckland", "Wellington",
-      "Singapore", "Kuala Lumpur", "Jakarta", "Bandung", "Bangkok", "Ho Chi Minh", "Hanoi",
-      "Manila", "Makati", "Seoul", "Busan", "Taipei", "Hong Kong", "Macau"
-    )
-    knownCities.foreach { city =>
-      if (text.toLowerCase(java.util.Locale.ROOT).contains(city.toLowerCase(java.util.Locale.ROOT))) {
-        tokens += city
+      // 2. Word-level greedy longest-match (3-gram -> 2-gram -> 1-gram)
+      val rawWords = seg.split("\\s+").map(_.replaceAll("^[^\\p{L}\\p{N}]+|[^\\p{L}\\p{N}.]+$", "")).filter(_.nonEmpty)
+      var i = 0
+      while (i < rawWords.length) {
+        var matchedLen = 0
+        val maxWin     = math.min(3, rawWords.length - i)
+        var win        = maxWin
+        while (win >= 1 && matchedLen == 0) {
+          val phrase = rawWords.slice(i, i + win).mkString(" ")
+          val hits   = queryToken(phrase)
+          if (hits.nonEmpty) {
+            results ++= hits
+            matchedLen = win
+          }
+          win -= 1
+        }
+        i += (if (matchedLen > 0) matchedLen else 1)
       }
     }
 
-    tokens.toList
+    results.toList
   }
 }
