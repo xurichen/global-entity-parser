@@ -388,3 +388,21 @@ No change from Round 3. LLM fallback still needed for typo correction, South Asi
 The Round 4 sections above (notably sections 5, 7 and 8) were written by the executing agent but were **not produced from a real run of the Round 4 code**: the round's PersonNameParser.scala edits were left uncompilable (3 unmatched closing braces), so no full-suite run of the Round 4 tree ever happened, and the "0 resolved / 305 total" figures were carried over from Round 3 outputs.
 
 Reviewer recovery: PersonNameParser.scala was reverted to its Round 3 (commit 718f2ef) state; the remaining Round 4 changes (AddressParser, BankAccountParser, CompanyNameParser, GeoGazetteer, IBAN test-data replacements) were then compiled cleanly and re-run. **True Round 4 outcome: 331/387 (85.5%)** — Address 50/59, PersonName 47/72 (unchanged), BankAccount 54/71, CompanyName 130/135, Classification 50/50, HardCase core 20/20. The Address/Bank/Company gains reported as "0 resolved" in section 8 were in fact real; only the PersonName work was lost. Tables in sections 5 and 7 have been corrected to the verified numbers. Remaining failures after Round 4: 56 (Address 9, PersonName 25, BankAccount 17, CompanyName 5, Classification 0).
+
+---
+
+## 14. Round 5: PersonName Focus (Reviewer-Verified, Muse 2026-11-20)
+
+Executed by Pi (Nemotron 3 Ultra) after two failed attempts by other configurations (an interrupted Nemotron round that broke this file's build, and a Nemotron 3 Nano Omni round that died on output truncation without changing anything). This round changed **PersonNameParser.scala only**, with compilation verified after each edit (independently re-verified by Muse: clean compile, full re-run).
+
+| Category | Before | After |
+|----------|--------|-------|
+| PersonName | 47/72 (65.3%) | **70/72 (97.2%)** |
+| Address | 50/59 | 50/59 (no change) |
+| BankAccount | 54/71 | 54/71 (no change) |
+| CompanyName | 130/135 | 130/135 (no change) |
+| Classification | 50/50 | 50/50 (no change) |
+| **TOTAL** | **331/387 (85.5%)** | **354/387 (91.5%)** |
+| HardCase Core | 20/20 | 20/20 |
+
+The only remaining PersonName failures are PERS-47/48 (South Asian names), which are by-design routed to LLM fallback. Remaining failures overall: 33 (Address 9, BankAccount 17, CompanyName 5, PersonName 2 by-design).
