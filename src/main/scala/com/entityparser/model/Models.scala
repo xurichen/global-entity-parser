@@ -223,6 +223,26 @@ object CountryEvidence {
     val description = s"Explicit hint from $source: $countryCode"
     val weight      = 9.0
   }
+  final case class GeoAnchor(countryCode: String, source: String) extends CountryEvidence {
+    val signalType  = "geo_anchor"
+    val description = s"Geo anchor from $source: $countryCode"
+    val weight      = 3.0
+  }
+  final case class DiscriminatorHit(countryCode: String, matched: String) extends CountryEvidence {
+    val signalType  = "discriminator"
+    val description = s"Discriminator '$matched' matches $countryCode"
+    val weight      = 3.5
+  }
+  final case class CountryNameMention(
+    countryCode: String,
+    matchedName: String,
+    position: String,
+    weightOverride: Option[Double] = None
+  ) extends CountryEvidence {
+    val signalType     = "country_name"
+    val description    = s"Country name '$matchedName' mentioned at $position of the input, matches $countryCode"
+    val weight: Double = weightOverride.getOrElse(9.0)
+  }
 }
 
 /**

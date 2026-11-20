@@ -90,6 +90,21 @@ object CountryDetector {
   private val IsAnchor    = """(?i)(iceland|\bIS\b|\bREYKJAVIK\b)""".r
   private val IeAnchor    = """(?i)(ireland|\bIE\b|\bDUBLIN\b)""".r
 
+  // --- Tier-2 in-language-group discriminator patterns (weight 3.5, max 1 per country) ---
+  private val SimpleDiscriminatorPatterns: List[(String, scala.util.matching.Regex)] = List(
+    ("MX", """(?iu)\b(?:colonia|delegaci[oó]n)\b""".r),
+    ("AR", """(?iu)\bcaba\b""".r),
+    ("CL", """(?iu)\bcomuna\b""".r),
+    ("GB", """(?iu)\bpostcode\b""".r),
+    ("US", """(?iu)\bzip\s+code\b""".r),
+    ("BR", """(?iu)\b(?:bairro|cep)\b""".r),
+    ("PT", """(?iu)\bc[oó]digo\s+postal\b""".r),
+    ("SA", """(?iu)\bksa\b""".r)
+  )
+  private val AuSuburbPattern        = """(?iu)\bsuburb\b""".r
+  private val AuStateAbbrevPattern   = """(?iu)\b(?:nsw|vic|qld|sa|wa|tas|nt|act)\b""".r
+  private val FourDigitNumberPattern = """(?<![-\d])\b\d{4}\b(?![-\d])""".r
+
   // --- Hard identifier patterns ---
   // Matches both compact IBANs (DE89370400440532013000) and the standard
   // printed spaced form in groups of 4 (DE89 3704 0044 0532 0130 00).
@@ -295,14 +310,16 @@ object CountryDetector {
     false
   }
 
-  private def computeGazetteerWeight(ev: PlaceEvidence): Double = {
+  private def computeGazetteerWeight(ev: PlaceEvidence, isNameLike: Boolean): Double = {
     val base = if (ev.isAdmin1) 4.0 else 2.0
     val popFactor =
       if (ev.population <= 0L) 1.0
       else 1.0 + math.min(1.5, math.max(0.0, math.log10(ev.population.toDouble + 1.0) - 4.0))
-    val k          = math.max(1, ev.countryAmbiguity)
-    val ambPenalty = 1.0 / (math.log(1.0 + k.toDouble) / Log2)
-    base * popFactor * ambPenalty
+    val k           = math.max(1, ev.countryAmbiguity)
+    val ambPenalty  = 1.0 / (math.log(1.0 + k.toDouble) / Log2)
+    val aliasFactor = if (ev.matchedViaAlias) 0.5 else 1.0
+    val nameFactor  = if (isNameLike) 0.3 else 1.0
+    base * popFactor * ambPenalty * aliasFactor * nameFactor
   }
 
   /**
@@ -310,10 +327,132 @@ object CountryDetector {
    * weighted reverse-index gazetteer lookup.
    * Returns Top 5 candidates sorted by raw accumulated score descending (uncapped).
    */
+  // Country names (English + endonyms) for the position-weighted mention pass
+  // in extractCandidates. Deliberately excluded as too ambiguous: bare "Korea",
+  // "Georgia" (US state), bare "America", "Guinea", "Congo", "Mali", "Niger",
+  // "Chad" (common first name), and "Island" for Iceland (common noun).
+  private val CountryNameTable: List[(String, List[String])] = List(
+    "CN" -> List("china", "中国", "中國"),
+    "HK" -> List("hong kong", "香港"),
+    "MO" -> List("macau", "macao", "澳门", "澳門"),
+    "TW" -> List("taiwan", "台湾", "台灣"),
+    "SG" -> List("singapore", "新加坡"),
+    "JP" -> List("japan", "日本"),
+    "KR" -> List("south korea", "韩国", "韓國", "대한민국"),
+    "KP" -> List("north korea"),
+    "US" -> List("united states of america", "united states", "usa", "u.s.a."),
+    "CA" -> List("canada"),
+    "MX" -> List("mexico", "méxico"),
+    "BR" -> List("brazil", "brasil"),
+    "AR" -> List("argentina"),
+    "CL" -> List("chile"),
+    "CO" -> List("colombia"),
+    "PE" -> List("peru", "perú"),
+    "VE" -> List("venezuela"),
+    "DO" -> List("dominican republic", "república dominicana", "republica dominicana"),
+    "CU" -> List("cuba"),
+    "PA" -> List("panama", "panamá"),
+    "GB" -> List("united kingdom", "great britain", "england", "scotland", "wales"),
+    "IE" -> List("ireland", "éire", "eire"),
+    "FR" -> List("france"),
+    "DE" -> List("germany", "deutschland"),
+    "ES" -> List("spain", "españa", "espana"),
+    "PT" -> List("portugal"),
+    "IT" -> List("italy", "italia"),
+    "NL" -> List("netherlands", "holland", "nederland"),
+    "BE" -> List("belgium", "belgique", "belgië", "belgie", "belgien"),
+    "CH" -> List("switzerland", "schweiz", "suisse", "svizzera"),
+    "AT" -> List("austria", "österreich", "osterreich"),
+    "SE" -> List("sweden", "sverige"),
+    "NO" -> List("norway", "norge"),
+    "DK" -> List("denmark", "danmark"),
+    "FI" -> List("finland", "suomi"),
+    "IS" -> List("iceland", "ísland"),
+    "PL" -> List("poland", "polska"),
+    "CZ" -> List("czech republic", "czechia", "česko", "cesko"),
+    "SK" -> List("slovakia", "slovensko"),
+    "HU" -> List("hungary", "magyarország", "magyarorszag"),
+    "RO" -> List("romania", "românia"),
+    "BG" -> List("bulgaria", "българия"),
+    "GR" -> List("greece", "ελλάδα"),
+    "HR" -> List("croatia", "hrvatska"),
+    "SI" -> List("slovenia", "slovenija"),
+    "EE" -> List("estonia", "eesti"),
+    "LV" -> List("latvia", "latvija"),
+    "LT" -> List("lithuania", "lietuva"),
+    "RU" -> List("russia", "россия"),
+    "UA" -> List("ukraine", "україна"),
+    "BY" -> List("belarus", "беларусь"),
+    "KZ" -> List("kazakhstan", "казахстан"),
+    "UZ" -> List("uzbekistan"),
+    "MN" -> List("mongolia"),
+    "TR" -> List("turkey", "türkiye", "turkiye"),
+    "IL" -> List("israel"),
+    "SA" -> List("saudi arabia", "السعودية"),
+    "AE" -> List("united arab emirates", "uae", "الإمارات"),
+    "QA" -> List("qatar", "قطر"),
+    "KW" -> List("kuwait", "الكويت"),
+    "OM" -> List("oman", "عُمان"),
+    "BH" -> List("bahrain", "البحرين"),
+    "JO" -> List("jordan", "الأردن"),
+    "LB" -> List("lebanon", "لبنان"),
+    "IQ" -> List("iraq", "العراق"),
+    "IR" -> List("iran", "ایران"),
+    "EG" -> List("egypt", "مصر"),
+    "MA" -> List("morocco", "maroc", "المغرب"),
+    "DZ" -> List("algeria", "algérie", "algerie", "الجزائر"),
+    "TN" -> List("tunisia", "tunisie", "تونس"),
+    "NG" -> List("nigeria"),
+    "GH" -> List("ghana"),
+    "KE" -> List("kenya"),
+    "TZ" -> List("tanzania"),
+    "ZA" -> List("south africa"),
+    "SN" -> List("senegal", "sénégal"),
+    "CM" -> List("cameroon", "cameroun"),
+    "CI" -> List("ivory coast", "côte d'ivoire", "cote d'ivoire"),
+    "AO" -> List("angola"),
+    "MZ" -> List("mozambique", "moçambique", "mocambique"),
+    "MG" -> List("madagascar"),
+    "ET" -> List("ethiopia"),
+    "IN" -> List("india", "भारत"),
+    "PK" -> List("pakistan", "پاکستان"),
+    "BD" -> List("bangladesh", "বাংলাদেশ"),
+    "LK" -> List("sri lanka"),
+    "NP" -> List("nepal", "नेपाल"),
+    "TH" -> List("thailand", "ประเทศไทย"),
+    "VN" -> List("vietnam", "việt nam", "viet nam"),
+    "ID" -> List("indonesia"),
+    "MY" -> List("malaysia"),
+    "PH" -> List("philippines", "pilipinas"),
+    "MM" -> List("myanmar", "burma"),
+    "KH" -> List("cambodia"),
+    "LA" -> List("laos"),
+    "AU" -> List("australia"),
+    "NZ" -> List("new zealand"),
+    "SD" -> List("sudan"),
+    "SS" -> List("south sudan"),
+    "BJ" -> List("benin", "bénin")
+  )
+
   def extractCandidates(text: String, gazetteer: GeoGazetteer, explicitHint: Option[String] = None): CountryCandidates = {
     val s          = text.trim
     val lower      = s.toLowerCase(java.util.Locale.ROOT)
     val candidates = scala.collection.mutable.Map[String, (Double, List[CountryEvidence])]()
+
+    val wordTokens = s.split("\\s+").filter(_.nonEmpty)
+    val isNameLike =
+      wordTokens.nonEmpty &&
+      wordTokens.length <= 5 &&
+      !s.exists(_.isDigit) &&
+      !s.contains(',') &&
+      !s.contains('，')
+
+    // Account-like strings (bank account numbers): few letters, many digits.
+    // In such strings a leading standalone country code is a deliberate country
+    // prefix and digit groups are account numbers, never postcodes.
+    val letterCount = s.count(_.isLetter)
+    val digitCount  = s.count(_.isDigit)
+    val accountLike = letterCount <= 8 && digitCount >= 8
 
     def addEvidence(cc: String, evidence: CountryEvidence): Unit = {
       val (score, evs) = candidates.getOrElse(cc, (0.0, Nil))
@@ -324,6 +463,95 @@ object CountryDetector {
     explicitHint.foreach { h =>
       val cc = h.trim.toUpperCase(java.util.Locale.ROOT)
       if (cc.length == 2) addEvidence(cc, CountryEvidence.ExplicitHint(cc, "user_hint"))
+    }
+
+    // 1b. Country-name mentions, weighted by position (reviewer addition, round 9).
+    // A country name at the END of the string is the standard trailing address
+    // component (strong, 9.0). At the START of a Latin-script string it is usually
+    // a brand modifier ("America Coffee", "Japan Store" - weak, 2.0, and dropped
+    // when a commercial noun follows); an East-Asian large-to-small address
+    // legitimately STARTS with the country, so a beginning mention in CJK/Hangul/
+    // Kana text is also strong. In the MIDDLE the name is ambiguous (it may be a
+    // foreign state or city - New Mexico, Benin City - or part of a company name),
+    // so it stays a weak hint (3.0) and other evidence arbitrates.
+    val hasEastAsianText = s.exists(c =>
+      (c >= '一' && c <= '鿿') || (c >= '가' && c <= '힯') || (c >= '぀' && c <= 'ヿ'))
+    def mentionPosition(matchStart: Int, matchEnd: Int): String = {
+      val segments = s.split("[,;\n]").toList
+      if (segments.length <= 1) {
+        if (matchEnd >= s.length - 2) "end"
+        else {
+          val frac = if (s.isEmpty) 0.0 else matchStart.toDouble / s.length
+          if (frac < 0.34) "beginning" else if (frac > 0.66) "end" else "middle"
+        }
+      } else {
+        var offset = 0
+        var idx    = -1
+        var i      = 0
+        while (i < segments.length && idx < 0) {
+          val segEnd = offset + segments(i).length
+          if (matchStart >= offset && matchStart <= segEnd + 1) idx = i
+          offset = segEnd + 1
+          i += 1
+        }
+        if (idx <= 0) "beginning"
+        else if (idx >= segments.length - 1 || matchEnd >= s.length - 2) "end"
+        else "middle"
+      }
+    }
+    val brandNouns = Set("coffee", "store", "shop", "mart", "restaurant", "cafe", "café",
+      "bar", "grill", "kitchen", "bakery", "sushi", "ramen", "hotel", "inn", "motel",
+      "salon", "studio", "gym", "pharmacy", "foods", "food", "market", "trading",
+      "imports", "exports", "travel", "tours", "airlines", "airways")
+    val placeNouns = Set("square", "street", "st", "road", "rd", "avenue", "ave",
+      "boulevard", "blvd", "lane", "ln", "drive", "dr", "place", "pl", "park",
+      "wharf", "tower", "towers", "building", "bldg", "bridge", "station",
+      "airport", "harbor", "harbour", "bay", "beach", "island", "islands",
+      "city", "town", "village", "creek", "river", "lake", "mount", "fort")
+    val bestMention = scala.collection.mutable.Map[String, (String, String, Double)]()
+    CountryNameTable.foreach { case (cc, names) =>
+      names.foreach { name =>
+        val suppressed =
+          (cc == "MX" && (name == "mexico" || name == "méxico") && lower.contains("new mexico")) ||
+          (cc == "GB" && name == "wales" && lower.contains("new south wales")) ||
+          (cc == "BJ" && (name == "benin" || name == "bénin") && lower.contains("benin city"))
+        if (!suppressed) {
+          val isNonLatin = name.exists(_ > 'ɏ')
+          val mOpt: Option[(Int, Int)] =
+            if (isNonLatin) {
+              val idx = s.indexOf(name)
+              if (idx >= 0) Some((idx, idx + name.length)) else None
+            } else {
+              val pat = ("(?i)(?<![A-Za-zÀ-ÿ])" + java.util.regex.Pattern.quote(name) + "(?![A-Za-zÀ-ÿ])").r
+              pat.findFirstMatchIn(s).map(m => (m.start, m.end))
+            }
+          mOpt.foreach { case (ms, me) =>
+            val pos = mentionPosition(ms, me)
+            val nextTok = s.substring(me).trim.toLowerCase(java.util.Locale.ROOT)
+              .split("[^\\p{L}]+").filter(_.nonEmpty).headOption.getOrElse("")
+            // A country name immediately followed by a place-type noun is a
+            // place name, not a country mention ("Canada Square, London").
+            val placeLike = placeNouns.contains(nextTok)
+            // Followed by a commercial noun it is a brand fragment
+            // ("America Coffee", "Japan Store") - except at the very end.
+            val brandLike = pos != "end" && !isNonLatin && brandNouns.contains(nextTok)
+            if (!placeLike && !brandLike) {
+              val w = pos match {
+                case "end"       => 9.0
+                case "beginning" => if (hasEastAsianText) 9.0 else 2.0
+                case _           => 3.0
+              }
+              bestMention.get(cc) match {
+                case Some((_, _, best)) if best >= w => ()
+                case _                               => bestMention(cc) = (name, pos, w)
+              }
+            }
+          }
+        }
+      }
+    }
+    bestMention.foreach { case (cc, (name, pos, w)) =>
+      addEvidence(cc, CountryEvidence.CountryNameMention(cc, name, pos, Some(w)))
     }
 
     // 2. Hard identifiers (IBAN, BIC, phone, ccTLD)
@@ -401,12 +629,29 @@ object CountryDetector {
       }
     }
 
+    // 3b. Account-like strings: leading country-code prefix + bank brands.
+    if (accountLike) {
+      val tokens = s.toUpperCase(java.util.Locale.ROOT).split("[\\s\\-/]+").filter(_.nonEmpty)
+      val prefixCc = tokens.headOption.filter(t => t.length == 2 && CountryNameTable.exists(_._1 == t))
+      prefixCc.foreach { cc =>
+        addEvidence(cc, CountryEvidence.ExplicitHint(cc, "account_prefix"))
+      }
+      if (!prefixCc.contains("SG") && tokens.exists(t => t == "DBS" || t == "OCBC" || t == "UOB")) {
+        addEvidence("SG", CountryEvidence.ExplicitHint("SG", "bank_brand"))
+      }
+    }
+
     // 4. Postcode format — skip matches inside an IBAN span (see step 2).
-    postcodePatterns.foreach { case (cc, regex) =>
-      regex.findAllMatchIn(s).filterNot { m =>
+    // Count at most once per country, keeping the single longest match.
+    // Suppressed entirely for account-like strings (digit groups there are
+    // account numbers, not postcodes).
+    if (!accountLike) postcodePatterns.foreach { case (cc, regex) =>
+      val nonIbanMatches = regex.findAllMatchIn(s).filterNot { m =>
         ibanSpans.exists { case (start, end) => m.start < end && start < m.end }
-      }.foreach { m =>
-        addEvidence(cc, CountryEvidence.PostcodeFormat(cc, m.group(0)))
+      }.map(_.group(0)).toList
+      if (nonIbanMatches.nonEmpty) {
+        val longest = nonIbanMatches.maxBy(_.length)
+        addEvidence(cc, CountryEvidence.PostcodeFormat(cc, longest))
       }
     }
 
@@ -433,7 +678,7 @@ object CountryDetector {
       }
     }
 
-    // 7. Geographic anchor patterns
+    // 7. Geographic anchor patterns (dedicated GeoAnchor evidence, weight 3.0)
     val geoAnchors: List[(String, String, Double)] = List(
       ("VN", "VN", if (VnAnchor.findFirstIn(s).isDefined) 0.5 else 0.0),
       ("ID", "ID", if (IdAnchor.findFirstIn(s).isDefined) 0.5 else 0.0),
@@ -498,19 +743,35 @@ object CountryDetector {
       ("IE", "IE", if (IeAnchor.findFirstIn(lower).isDefined) 0.5 else 0.0)
     )
     geoAnchors.foreach { case (cc, _, weight) =>
-      if (weight > 0) addEvidence(cc, CountryEvidence.ExplicitHint(cc, s"geo_anchor_$cc"))
+      if (weight > 0) addEvidence(cc, CountryEvidence.GeoAnchor(cc, s"geo_anchor_$cc"))
+    }
+
+    // 7b. Tier-2 in-language-group discriminators (weight 3.5, at most once per country)
+    SimpleDiscriminatorPatterns.foreach { case (cc, regex) =>
+      regex.findFirstIn(s).foreach { matched =>
+        addEvidence(cc, CountryEvidence.DiscriminatorHit(cc, matched))
+      }
+    }
+    val auDiscriminatorMatch: Option[String] =
+      AuSuburbPattern.findFirstIn(s).orElse {
+        if (FourDigitNumberPattern.findFirstIn(s).isDefined) AuStateAbbrevPattern.findFirstIn(s)
+        else None
+      }
+    auDiscriminatorMatch.foreach { matched =>
+      addEvidence("AU", CountryEvidence.DiscriminatorHit("AU", matched))
     }
 
     // 8. Weighted gazetteer reverse lookup with stopword filtering + city/admin1 co-occurrence
     val allPlaceHits = collectPlaceEvidence(s, gazetteer)
 
-    // Deduplicate scoring hits by (countryCode, canonicalName, isAdmin1) and by (matchedKey, countryCode, isAdmin1),
-    // keeping the highest-weight hit so same-named towns in one country or alias variants don't double-count.
-    val bestByPlace = scala.collection.mutable.LinkedHashMap.empty[(String, String, Boolean), (PlaceEvidence, Double)]
+    // Deduplicate scoring hits by (matchedKey, countryCode, isAdmin1) first, then by
+    // (countryCode, canonicalName) across both city and admin1 so a city and its same-named
+    // province/state don't double-count (keeping only the higher computed weight).
+    val bestByPlace = scala.collection.mutable.LinkedHashMap.empty[(String, String), (PlaceEvidence, Double)]
     val bestByKey   = scala.collection.mutable.HashMap.empty[(String, String, Boolean), (PlaceEvidence, Double)]
 
     allPlaceHits.foreach { ev =>
-      val w        = computeGazetteerWeight(ev)
+      val w        = computeGazetteerWeight(ev, isNameLike)
       val cc       = ev.city.countryCode
       val keyTuple = (ev.matchedKey, cc, ev.isAdmin1)
       bestByKey.get(keyTuple) match {
@@ -521,7 +782,7 @@ object CountryDetector {
 
     bestByKey.values.foreach { case (ev, w) =>
       val cc         = ev.city.countryCode
-      val placeTuple = (cc, ev.city.canonicalName.toLowerCase(java.util.Locale.ROOT), ev.isAdmin1)
+      val placeTuple = (cc, ev.city.canonicalName.toLowerCase(java.util.Locale.ROOT))
       bestByPlace.get(placeTuple) match {
         case Some((_, prevW)) if prevW >= w => ()
         case _                              => bestByPlace.put(placeTuple, (ev, w))
@@ -545,11 +806,13 @@ object CountryDetector {
     }
 
     // Co-occurrence bonus: if a city hit and its matching (countryCode, admin1Code) admin1 hit
-    // both appear in the same text (from distinct matchedKeys), award +3.0 once per country.
+    // both appear in the same text (from distinct matchedKeys), award +3.0 once per country
+    // (scaled by 0.3 for bare person-name-like inputs).
     val admin1HitsByKey = allPlaceHits
       .filter(ev => ev.isAdmin1 && ev.city.admin1Code.nonEmpty)
       .groupBy(ev => (ev.city.countryCode, ev.city.admin1Code))
 
+    val coOccurrenceWeight  = if (isNameLike) 3.0 * 0.3 else 3.0
     val coOccurrenceAwarded = scala.collection.mutable.HashSet.empty[String]
     allPlaceHits.foreach { cityEv =>
       val cc = cityEv.city.countryCode
@@ -564,7 +827,7 @@ object CountryDetector {
                 placeName = cityEv.city.canonicalName,
                 adminPath = s"co-occurrence: ${cityEv.city.admin1Code}/${cityEv.city.canonicalName} + ${adminEv.city.canonicalName}",
                 matchedKey = s"${cityEv.matchedKey}+${adminEv.matchedKey}",
-                weightOverride = Some(3.0)
+                weightOverride = Some(coOccurrenceWeight)
               )
             )
           }
@@ -599,7 +862,7 @@ object CountryDetector {
     "IT" -> """\b\d{5}\b""".r,
     "ES" -> """\b\d{5}\b""".r,
     "KR" -> """\b\d{5}\b""".r,
-    "TW" -> """\b\d{3,5}\b""".r,
+    "TW" -> """\b(?:\d{5}|\d{3}[-\s]\d{2})\b""".r,
     "HK" -> """\b999077\b""".r,
     "MY" -> """\b\d{5}\b""".r,
     "TH" -> """\b\d{5}\b""".r,

@@ -28,7 +28,8 @@ final case class CityRecord(
 
 /**
  * Gazetteer retrieval evidence: a matched city/admin1 record with its administrative path,
- * hit type (city vs admin1), population, and cross-country ambiguity count (K).
+ * hit type (city vs admin1), population, cross-country ambiguity count (K), and whether
+ * the match occurred via an alias rather than the canonical name.
  * Used as evidence in Stage 1 country candidate extraction.
  */
 final case class PlaceEvidence(
@@ -37,7 +38,8 @@ final case class PlaceEvidence(
   matchedKey: String,
   isAdmin1: Boolean = false,
   population: Long = 0L,
-  countryAmbiguity: Int = 1
+  countryAmbiguity: Int = 1,
+  matchedViaAlias: Boolean = false
 )
 
 class GeoGazetteer(
@@ -108,7 +110,7 @@ class GeoGazetteer(
         .map(k => EntityNormalizer.keyToken(k, c.countryCode == "DE"))
         .filter(_.nonEmpty)
       keys.foreach { k =>
-        m.getOrElseUpdate((c.countryCode, k), scala.collection.mutable.ListBuffer.empty[CityRecord]) += c
+        m.getOrElseUpdate((c.countryCode, k), scala.collection.mutable.ListBuffer.empty) += c
       }
     }
     m.view.mapValues(_.toList.distinct).toMap
@@ -185,16 +187,19 @@ class GeoGazetteer(
     val k = math.max(1, distinctCountries.size)
 
     val cityEvs = cityMatches.map { c =>
+      val canonicalKey = EntityNormalizer.keyToken(c.canonicalName, c.countryCode == "DE")
       PlaceEvidence(
         city = c,
         matchedName = raw,
         matchedKey = key,
         isAdmin1 = false,
         population = c.population,
-        countryAmbiguity = k
+        countryAmbiguity = k,
+        matchedViaAlias = key != canonicalKey
       )
     }
     val admin1Evs = admin1Matches.map { a1 =>
+      val canonicalKey = EntityNormalizer.keyToken(a1.canonicalName, a1.countryCode == "DE")
       val asCity = CityRecord(a1.countryCode, a1.admin1Code, a1.canonicalName, a1.aliases, population = 0L)
       PlaceEvidence(
         city = asCity,
@@ -202,7 +207,8 @@ class GeoGazetteer(
         matchedKey = key,
         isAdmin1 = true,
         population = 0L,
-        countryAmbiguity = k
+        countryAmbiguity = k,
+        matchedViaAlias = key != canonicalKey
       )
     }
     cityEvs ++ admin1Evs
@@ -233,16 +239,19 @@ class GeoGazetteer(
     val k = math.max(1, distinctCountries.size)
 
     val cityEvs = cityMatches.map { c =>
+      val canonicalKey = EntityNormalizer.keyToken(c.canonicalName, c.countryCode == "DE")
       PlaceEvidence(
         city = c,
         matchedName = c.canonicalName,
         matchedKey = key,
         isAdmin1 = false,
         population = c.population,
-        countryAmbiguity = k
+        countryAmbiguity = k,
+        matchedViaAlias = key != canonicalKey
       )
     }
     val admin1Evs = admin1Matches.map { a1 =>
+      val canonicalKey = EntityNormalizer.keyToken(a1.canonicalName, a1.countryCode == "DE")
       val asCity = CityRecord(a1.countryCode, a1.admin1Code, a1.canonicalName, a1.aliases, population = 0L)
       PlaceEvidence(
         city = asCity,
@@ -250,7 +259,8 @@ class GeoGazetteer(
         matchedKey = key,
         isAdmin1 = true,
         population = 0L,
-        countryAmbiguity = k
+        countryAmbiguity = k,
+        matchedViaAlias = key != canonicalKey
       )
     }
     cityEvs ++ admin1Evs
