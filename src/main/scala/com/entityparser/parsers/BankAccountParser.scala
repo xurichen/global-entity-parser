@@ -107,6 +107,81 @@ final class BankAccountParser {
   private val CnapsRegex      = """^(?:CNAPS|联行号)?\s*[:\-]?\s*(\d{12})(?:[\s,/\-]+(?:ACC(?:OUNT)?|账号)?\s*[:\-]?\s*(\d{12,19}))?$""".r
   private val JpBankRegex     = """^(?:JP|BANK)?\s*[:\-]?\s*(\d{4})[\-\s](\d{3})(?:[\-\s](\d{7}))?$""".r
 
+  // Local bank account format regexes
+  // HK: HSBC 004-123-456789-001, Standard Chartered 036-876543210
+  private val HkBankRegex = """^(?:HSBC|Standard\s+Chartered)\s+(\d{3})[-](\d{3})[-](\d{6})[-](\d{3})$""".r
+  private val HkBankRegex2 = """^(?:HSBC|Standard\s+Chartered)\s+(\d{3})[-](\d{9})$""".r
+  private val HkBankRegex3 = """^(?:HSBC|Standard\s+Chartered)\s+(\d{3})\s+(\d{3})\s+(\d{6})\s+(\d{3})$""".r
+  private val HkBankRegex4 = """^(?:HSBC|Standard\s+Chartered)\s+(\d{3})\s+(\d{12})$""".r
+
+  // MO: BNU 001-123456-7
+  private val MoBankRegex = """^BNU\s+(\d{3})[-](\d{6})[-](\d)$""".r
+
+  // TW: 004 1234 5678901 (bank code 3 digits, branch 4 digits, account 7 digits)
+  private val TwBankRegex = """^(\d{3})\s+(\d{4})\s+(\d{7,10})$""".r
+  private val TwBankRegex2 = """^(\d{3})\s+(\d{4})\s+(\d{7,10})$""".r
+
+  // SG: DBS 7171 1234567, OCBC 7339 9876543210 (bank/branch 4 digits, account 7-10 digits)
+  private val SgBankRegex = """^(?:DBS|OCBC|UOB)\s+(\d{4})\s+(\d{7,10})$""".r
+  private val SgBankRegex2 = """^(?:DBS|OCBC|UOB)\s+(\d{4})\s+(\d{7,10})$""".r
+
+  // CA: 00012-003 1234567 (transit 5 digits, institution 3 digits, account 7-12 digits)
+  private val CaBankRegex = """^(\d{5})[-](\d{3})\s+(\d{7,12})$""".r
+
+  // BR: 001 1234 5678901 2 (bank 3 digits, branch 4 digits, account 8-13 digits, check digit)
+  private val BrBankRegex = """^(\d{3})\s+(\d{4})\s+(\d{8,13})\s+(\d)$""".r
+  private val BrBankRegex2 = """^(\d{3})\s+(\d{4})\s+(\d{8,13})\s+(\d)$""".r
+
+  // AR CBU: 22 digits (bank 3, branch 4, account 13, check 2) - simplified
+  private val ArCbuRegex = """^(\d{3})(\d{4})(\d{13})(\d{2})$""".r
+  private val ArCbuRegex2 = """^(\d{3})(\d{4})(\d{13})(\d{2})$""".r
+
+  // ZA: 62345678901 (bank 2 digits, account 9 digits)
+  private val ZaBankRegex = """^(\d{2})(\d{9,11})$""".r
+
+  // MY: MBBEMYKL 123456789012 (SWIFT/BIC + account)
+  private val MyBankRegex = """^([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\s+(\d{10,15})$""".r
+
+  // ID: BRINIDJA 1234567890 (SWIFT/BIC + account)
+  private val IdBankRegex = """^([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\s+(\d{8,15})$""".r
+  private val IdBankRegex2 = """^([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\s+(\d{8,15})$""".r
+
+  // NG NUBAN: 10 digits (bank 3, account 7)
+  private val NgNubanRegex = """^(\d{3})(\d{7})$""".r
+
+  // KE: 0200000123456 (bank 2, branch 4, account 6)
+  private val KeBankRegex = """^(\d{2})(\d{4})(\d{6,10})$""".r
+  private val KeBankRegex2 = """^(\d{2})(\d{4})(\d{6,10})$""".r
+
+  // KR: 088-01-1234567 (bank 3, branch 2, account 7)
+  private val KrBankRegex = """^(\d{3})[-](\d{2})[-](\d{7})$""".r
+  // Local bank account format regexes
+  // HK: HSBC 004-123-456789-001, Standard Chartered 036-876543210
+
+  // MO: BNU 001-123456-7
+
+  // TW: 004 1234 5678901 (bank code 3 digits, branch 4 digits, account 7 digits)
+
+  // SG: DBS 7171 1234567, OCBC 7339 9876543210 (bank/branch 4 digits, account 7-10 digits)
+
+  // CA: 00012-003 1234567 (transit 5 digits, institution 3 digits, account 7-12 digits)
+
+  // BR: 001 1234 5678901 2 (bank 3 digits, branch 4 digits, account 8-13 digits, check digit)
+
+  // AR CBU: 22 digits (bank 3, branch 4, account 13, check 2) - simplified
+
+  // ZA: 62345678901 (bank 2 digits, account 9 digits)
+
+  // MY: MBBEMYKL 123456789012 (SWIFT/BIC + account)
+
+  // ID: BRINIDJA 1234567890 (SWIFT/BIC + account)
+
+  // NG NUBAN: 10 digits (bank 3, account 7)
+
+  // KE: 0200000123456 (bank 2, branch 4, account 6)
+
+  // KR: 088-01-1234567 (bank 3, branch 2, account 7)
+
   def parse(cleaned: CleanedInput, countryHint: Option[String] = None): ParseResult[ParsedBankAccount] = {
     val raw     = cleaned.cleanedText.trim
     val upper   = raw.toUpperCase(java.util.Locale.ROOT)
@@ -209,7 +284,294 @@ final class BankAccountParser {
             )
             (parsed, 0.92, Nil)
 
-          case _ =>
+          
+          case HkBankRegex(bank, branch, account, check) if ccHint.contains("HK") || upper.contains("HSBC") || upper.contains("STANDARD CHARTERED") =>
+            val parsed = ParsedBankAccount(
+              format = "HK_LOCAL",
+              country = Some("HK"),
+              normalizedCompact = s"$bank$branch$account$check",
+              bankCode = Some(bank),
+              branchCode = Some(branch),
+              accountNumber = Some(account + check),
+              checkDigits = Some(check),
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case HkBankRegex2(bank, account) if ccHint.contains("HK") || upper.contains("HSBC") || upper.contains("STANDARD CHARTERED") =>
+            val parsed = ParsedBankAccount(
+              format = "HK_LOCAL",
+              country = Some("HK"),
+              normalizedCompact = s"$bank$account",
+              bankCode = Some(bank),
+              branchCode = None,
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case HkBankRegex3(bank, branch, account, check) if ccHint.contains("HK") || upper.contains("HSBC") || upper.contains("STANDARD CHARTERED") =>
+            val parsed = ParsedBankAccount(
+              format = "HK_LOCAL",
+              country = Some("HK"),
+              normalizedCompact = s"$bank$branch$account$check",
+              bankCode = Some(bank),
+              branchCode = Some(branch),
+              accountNumber = Some(account + check),
+              checkDigits = Some(check),
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case HkBankRegex4(bank, account) if ccHint.contains("HK") || upper.contains("HSBC") || upper.contains("STANDARD CHARTERED") =>
+            val parsed = ParsedBankAccount(
+              format = "HK_LOCAL",
+              country = Some("HK"),
+              normalizedCompact = s"$bank$account",
+              bankCode = Some(bank),
+              branchCode = None,
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case MoBankRegex(bank, branch, check) if ccHint.contains("MO") || upper.contains("BNU") =>
+            val parsed = ParsedBankAccount(
+              format = "MO_LOCAL",
+              country = Some("MO"),
+              normalizedCompact = s"$bank$branch$check",
+              bankCode = Some(bank),
+              branchCode = Some(branch),
+              accountNumber = Some(branch + check),
+              checkDigits = Some(check),
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case TwBankRegex(bank, branch, account) if ccHint.contains("TW") =>
+            val parsed = ParsedBankAccount(
+              format = "TW_LOCAL",
+              country = Some("TW"),
+              normalizedCompact = s"$bank$branch$account",
+              bankCode = Some(bank),
+              branchCode = Some(branch),
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case TwBankRegex2(bank, branch, account) if ccHint.contains("TW") =>
+            val parsed = ParsedBankAccount(
+              format = "TW_LOCAL",
+              country = Some("TW"),
+              normalizedCompact = s"$bank$branch$account",
+              bankCode = Some(bank),
+              branchCode = Some(branch),
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case SgBankRegex(branch, account) if ccHint.contains("SG") || upper.contains("DBS") || upper.contains("OCBC") || upper.contains("UOB") =>
+            val parsed = ParsedBankAccount(
+              format = "SG_LOCAL",
+              country = Some("SG"),
+              normalizedCompact = s"$branch$account",
+              bankCode = Some(branch.take(2)),
+              branchCode = Some(branch),
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case SgBankRegex2(branch, account) if ccHint.contains("SG") || upper.contains("DBS") || upper.contains("OCBC") || upper.contains("UOB") =>
+            val parsed = ParsedBankAccount(
+              format = "SG_LOCAL",
+              country = Some("SG"),
+              normalizedCompact = s"$branch$account",
+              bankCode = Some(branch.take(2)),
+              branchCode = Some(branch),
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case CaBankRegex(transit, institution, account) if ccHint.contains("CA") =>
+            val parsed = ParsedBankAccount(
+              format = "CA_LOCAL",
+              country = Some("CA"),
+              normalizedCompact = s"$transit$institution$account",
+              bankCode = Some(institution),
+              branchCode = Some(transit),
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case BrBankRegex(bank, branch, account, check) if ccHint.contains("BR") =>
+            val parsed = ParsedBankAccount(
+              format = "BR_LOCAL",
+              country = Some("BR"),
+              normalizedCompact = s"$bank$branch$account$check",
+              bankCode = Some(bank),
+              branchCode = Some(branch),
+              accountNumber = Some(account + check),
+              checkDigits = Some(check),
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case BrBankRegex2(bank, branch, account, check) if ccHint.contains("BR") =>
+            val parsed = ParsedBankAccount(
+              format = "BR_LOCAL",
+              country = Some("BR"),
+              normalizedCompact = s"$bank$branch$account$check",
+              bankCode = Some(bank),
+              branchCode = Some(branch),
+              accountNumber = Some(account + check),
+              checkDigits = Some(check),
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case ArCbuRegex(bank, branch, account, check) if ccHint.contains("AR") =>
+            val parsed = ParsedBankAccount(
+              format = "AR_CBU",
+              country = Some("AR"),
+              normalizedCompact = s"$bank$branch$account$check",
+              bankCode = Some(bank),
+              branchCode = Some(branch),
+              accountNumber = Some(account + check),
+              checkDigits = Some(check),
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case ArCbuRegex2(bank, branch, account, check) if ccHint.contains("AR") =>
+            val parsed = ParsedBankAccount(
+              format = "AR_CBU",
+              country = Some("AR"),
+              normalizedCompact = s"$bank$branch$account$check",
+              bankCode = Some(bank),
+              branchCode = Some(branch),
+              accountNumber = Some(account + check),
+              checkDigits = Some(check),
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case ZaBankRegex(bank, account) if ccHint.contains("ZA") =>
+            val parsed = ParsedBankAccount(
+              format = "ZA_LOCAL",
+              country = Some("ZA"),
+              normalizedCompact = s"$bank$account",
+              bankCode = Some(bank),
+              branchCode = None,
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case MyBankRegex(swift, account) if ccHint.contains("MY") =>
+            val parsed = ParsedBankAccount(
+              format = "MY_SWIFT_ACCOUNT",
+              country = Some("MY"),
+              normalizedCompact = s"$swift$account",
+              bankCode = Some(swift),
+              branchCode = None,
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case IdBankRegex(swift, account) if ccHint.contains("ID") =>
+            val parsed = ParsedBankAccount(
+              format = "ID_SWIFT_ACCOUNT",
+              country = Some("ID"),
+              normalizedCompact = s"$swift$account",
+              bankCode = Some(swift),
+              branchCode = None,
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case IdBankRegex2(swift, account) if ccHint.contains("ID") =>
+            val parsed = ParsedBankAccount(
+              format = "ID_SWIFT_ACCOUNT",
+              country = Some("ID"),
+              normalizedCompact = s"$swift$account",
+              bankCode = Some(swift),
+              branchCode = None,
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case NgNubanRegex(bank, account) if ccHint.contains("NG") =>
+            val parsed = ParsedBankAccount(
+              format = "NG_NUBAN",
+              country = Some("NG"),
+              normalizedCompact = s"$bank$account",
+              bankCode = Some(bank),
+              branchCode = None,
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case KeBankRegex(bank, branch, account) if ccHint.contains("KE") =>
+            val parsed = ParsedBankAccount(
+              format = "KE_LOCAL",
+              country = Some("KE"),
+              normalizedCompact = s"$bank$branch$account",
+              bankCode = Some(bank),
+              branchCode = Some(branch),
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case KeBankRegex2(bank, branch, account) if ccHint.contains("KE") =>
+            val parsed = ParsedBankAccount(
+              format = "KE_LOCAL",
+              country = Some("KE"),
+              normalizedCompact = s"$bank$branch$account",
+              bankCode = Some(bank),
+              branchCode = Some(branch),
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+          case KrBankRegex(bank, branch, account) if ccHint.contains("KR") =>
+            val parsed = ParsedBankAccount(
+              format = "KR_LOCAL",
+              country = Some("KR"),
+              normalizedCompact = s"$bank$branch$account",
+              bankCode = Some(bank),
+              branchCode = Some(branch),
+              accountNumber = Some(account),
+              checkDigits = None,
+              checksumValid = None
+            )
+            (parsed, 0.90, Nil)
+
+case _ =>
             val fallback = ParsedBankAccount(
               format = "UNKNOWN",
               country = ccHint,

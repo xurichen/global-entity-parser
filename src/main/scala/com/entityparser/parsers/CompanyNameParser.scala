@@ -30,9 +30,10 @@ final class CompanyNameParser(
 
   /** Separate listing markers (§3.4): Tbk (ID) - distinct from legal form. */
   private val ListingMarkers: List[ListingMarkerRule] = List(
-    ListingMarkerRule("ID", """(?i)(?:,?\s+|\s+)\(Persero\)\s*Tbk\.?$""", "Tbk"),
+    ListingMarkerRule("ID", """(?i)(?:,?\s+|\s+)Tbk\.?$""", "Tbk"),
     ListingMarkerRule("ID", """(?i)(?:,?\s+|\s+)Tbk\.?$""", "Tbk")
     // Note: plc (GB) and Bhd (MY) are legal forms, not separate listing markers
+    // Note: (Persero) is part of the company name (state-owned marker), not a listing marker
   )
 
   /** Department/prefix noise to strip before parsing (e.g. "Finance Dept:", "Accounts Payable") */
@@ -41,13 +42,15 @@ final class CompanyNameParser(
     """(?i)^(?:Attn\.?|Attention|C/O|Care\s+Of)\s*[:-]?\s*"""
   )
 
-  /** Trailing parenthetical remarks to strip (e.g. "(Accounts Payable)", "(Head Office)") */
-  private val TrailingParentheticals: String = """(?i)\s*\([^)]*\)\s*$"""
+  /** Trailing parenthetical remarks to strip (e.g. "(Accounts Payable)", "(Head Office)")
+   * But preserve (Persero) for ID companies as it's a state-owned marker */
+  private val TrailingParentheticals: String = """(?i)\s*(?!\(persero\))(?!\(PERSERO\))\([^)]*\)\s*$"""
 
   /** Per-country legal-form table ordered longest-match first (§2 & §3.4). */
   private val LegalForms: List[LegalFormRule] = List(
     // Indonesia (Prefix!)
     LegalFormRule("ID", """(?i)^(?:Perseroan Terbatas|P\.?T\.?)\s+""", "PT", LegalFormPosition.Prefix),
+    LegalFormRule("ID", """(?i)^(?:Perseroan Terbatas|PT)\s+""", "PT", LegalFormPosition.Prefix),
     LegalFormRule("ID", """(?i)^(?:Commanditaire Vennootschap|C\.?V\.?)\s+""", "CV", LegalFormPosition.Prefix),
     LegalFormRule("ID", """(?i)^U\.?D\.?\s+""", "UD", LegalFormPosition.Prefix),
 
@@ -77,6 +80,22 @@ final class CompanyNameParser(
     LegalFormRule("CN", """集团有限公司$""", "GROUP_LTD_CN", LegalFormPosition.Suffix),
     LegalFormRule("CN", """有限公司$""", "LTD_CN", LegalFormPosition.Suffix),
 
+    // Macau (Suffix) - prioritize English forms for bilingual names
+    LegalFormRule("MO", """(?i),?\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("MO", """(?i),?\s+Co\.?\s+Ltd\.?$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("MO", """股份有限公司$""", "LTD_CN", LegalFormPosition.Suffix),
+    LegalFormRule("MO", """有限责任公司$""", "LLC_CN", LegalFormPosition.Suffix),
+    LegalFormRule("MO", """集团有限公司$""", "GROUP_LTD_CN", LegalFormPosition.Suffix),
+    LegalFormRule("MO", """有限公司$""", "LTD_CN", LegalFormPosition.Suffix),
+    LegalFormRule("MO", """(?i)\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("MO", """(?i)\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+
+    // Taiwan (Suffix) - uses LTD_CN for 股份有限公司 (common in TW)
+    LegalFormRule("TW", """股份有限公司$""", "LTD_CN", LegalFormPosition.Suffix),
+    LegalFormRule("TW", """有限责任公司$""", "LLC_CN", LegalFormPosition.Suffix),
+    LegalFormRule("TW", """集团有限公司$""", "GROUP_LTD_CN", LegalFormPosition.Suffix),
+    LegalFormRule("TW", """有限公司$""", "LTD_CN", LegalFormPosition.Suffix),
+
     // Germany / DACH (Suffix)
     LegalFormRule("DE", """(?i),?\s+GmbH\s*&\s*Co\.?\s*KG$""", "GMBH_CO_KG", LegalFormPosition.Suffix),
     LegalFormRule("DE", """(?i),?\s+GmbH$""", "GMBH", LegalFormPosition.Suffix),
@@ -102,6 +121,7 @@ final class CompanyNameParser(
     LegalFormRule("US", """(?i),?\s+Corp\.?$""", "CORP", LegalFormPosition.Suffix),
     LegalFormRule("US", """(?i),?\s+L\.?L\.?C\.?$""", "LLC", LegalFormPosition.Suffix),
     LegalFormRule("US", """(?i),?\s+&\s*Co\.?$""", "CO", LegalFormPosition.Suffix),
+    LegalFormRule("GB", """(?i),?\s+Co\.?\s+Ltd\.?$""", "LTD", LegalFormPosition.Suffix),
     LegalFormRule("GB", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
     LegalFormRule("GB", """(?i),?\s+Ltd\.?$""", "LTD", LegalFormPosition.Suffix),
     LegalFormRule("GB", """(?i),?\s+L\.?L\.?P\.?$""", "LLP", LegalFormPosition.Suffix),
@@ -176,6 +196,20 @@ final class CompanyNameParser(
     // Taiwan (Suffix) - uses CN rules
 
     // Crown Dependencies / Overseas Territories (VG, KY, JE, GG, IM, GI, BM) - use GB rules
+    LegalFormRule("JE", """(?i),?\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("JE", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("GG", """(?i),?\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("GG", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("IM", """(?i),?\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("IM", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("GI", """(?i),?\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("GI", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("BM", """(?i),?\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("BM", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("VG", """(?i),?\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("VG", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("KY", """(?i),?\s+Company\s+Limited$""", "LTD", LegalFormPosition.Suffix),
+    LegalFormRule("KY", """(?i),?\s+Limited$""", "LTD", LegalFormPosition.Suffix),
 
     // Philippines (Suffix) - uses US rules
 
@@ -183,21 +217,27 @@ final class CompanyNameParser(
 
     // Indonesia additional - already covered
 
-    // Vietnam (Suffix)
-    LegalFormRule("VN", """(?i),?\s+JSC$""", "JSC", LegalFormPosition.Suffix),
-    LegalFormRule("VN", """(?i),?\s+Joint\s+Stock\s+Company$""", "JSC", LegalFormPosition.Suffix),
-    LegalFormRule("VN", """(?i),?\s+Corporation$""", "CORP", LegalFormPosition.Suffix),
-    LegalFormRule("VN", """(?i),?\s+Corp\.?$""", "CORP", LegalFormPosition.Suffix),
+    // Vietnam (Suffix) - JSC/Corporation map to CTCP (Công ty Cổ Phần)
+    LegalFormRule("VN", """(?i),?\s+JSC$""", "CTCP", LegalFormPosition.Suffix),
+    LegalFormRule("VN", """(?i),?\s+Joint\s+Stock\s+Company$""", "CTCP", LegalFormPosition.Suffix),
+    LegalFormRule("VN", """(?i),?\s+Corporation$""", "CTCP", LegalFormPosition.Suffix),
+    LegalFormRule("VN", """(?i),?\s+Corp\.?$""", "CTCP", LegalFormPosition.Suffix),
 
-    // Korea (Suffix)
-    LegalFormRule("KR", """(?i),?\s+주식회사$""", "KK", LegalFormPosition.Suffix),
-    LegalFormRule("KR", """(?i),?\s+\(주\)$""", "KK", LegalFormPosition.Suffix),
-    LegalFormRule("KR", """(?i),?\s+유한회사$""", "YH", LegalFormPosition.Suffix),
-    LegalFormRule("KR", """(?i),?\s+\(유\)$""", "YH", LegalFormPosition.Suffix),
+    // Korea (Suffix) - handle both spaced and no-space patterns
+    LegalFormRule("KR", """(?i),?\s*주식회사$""", "KK", LegalFormPosition.Suffix),
+    LegalFormRule("KR", """(?i),?\s*\(주\)$""", "KK", LegalFormPosition.Suffix),
+    LegalFormRule("KR", """(?i),?\s*유한회사$""", "YH", LegalFormPosition.Suffix),
+    LegalFormRule("KR", """(?i),?\s*\(유\)$""", "YH", LegalFormPosition.Suffix),
+    // Also match (주) without country hint for Korean-only text - MOVED UP for priority
+    LegalFormRule("", """(?i)\(주\)$""", "KK", LegalFormPosition.Suffix),
+    LegalFormRule("", """(?i)\s*\(주\)$""", "KK", LegalFormPosition.Suffix),
 
-    // Indonesia additional - handle (Persero)
-    LegalFormRule("ID", """(?i),?\s+Tbk\.?$""", "TBK", LegalFormPosition.Suffix),
-    LegalFormRule("ID", """(?i),?\s+\(Persero\)\s*Tbk\.?$""", "TBK", LegalFormPosition.Suffix),
+    // Indonesia additional - handle (Persero) and Tbk
+    LegalFormRule("ID", """(?i),?\s+Tbk\.?$""", "Tbk", LegalFormPosition.Suffix),
+    LegalFormRule("ID", """(?i),?\s+\(Persero\)\s*Tbk\.?$""", "Tbk", LegalFormPosition.Suffix),
+    LegalFormRule("ID", """(?i)\(Persero\)""", "PT", LegalFormPosition.Suffix),
+    // Also recognize PT prefix without dots
+    LegalFormRule("ID", """(?i)^PT\s+""", "PT", LegalFormPosition.Prefix),
 
     // Nigeria/Kenya/Ghana/Tanzania - use GB rules
 

@@ -42,10 +42,28 @@ final class AddressParser(
   private val CnPostcode = """\b(\d{6})\b""".r
 
   // US small-to-large: 1600 Amphitheatre Pkwy, Mountain View, CA 94043
+  // Also handles: 12345 NE 36th St (where 12345 is house number, NE 36th St is street)
   private val UsRegex =
-    """^(\d+[A-Za-z]?(?:-\d+)?)\s+([^,]+?)(?:,\s*(?:Apt|Suite|Ste|Unit|#)\s*([^,]+))?,\s*([^,]+?),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)(?:,\s*(?:USA|US|United States))?$""".r
+    """^(\d+[A-Za-z]?(?:-\d+)?)\s+([^,]+?)(?:,\s*(?:Apt|Suite|Ste|Unit|#)\s*([^,]+))?,\s*([^,]+?),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?(?:,\s*(?:USA|US|United States))?$""".r
   private val UsRegexPoBox =
-    """^PO\s+Box\s+(\d+),\s*([^,]+?),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)(?:,\s*(?:USA|US|United States))?$""".r
+    """^PO\s+Box\s+(\d+),\s*([^,]+?),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?(?:,\s*(?:USA|US|United States))?$""".r
+
+  // US state abbreviation to full name mapping
+  private val UsStateMap: Map[String, String] = Map(
+    "AL" -> "Alabama", "AK" -> "Alaska", "AZ" -> "Arizona", "AR" -> "Arkansas",
+    "CA" -> "California", "CO" -> "Colorado", "CT" -> "Connecticut", "DE" -> "Delaware",
+    "FL" -> "Florida", "GA" -> "Georgia", "HI" -> "Hawaii", "ID" -> "Idaho",
+    "IL" -> "Illinois", "IN" -> "Indiana", "IA" -> "Iowa", "KS" -> "Kansas",
+    "KY" -> "Kentucky", "LA" -> "Louisiana", "ME" -> "Maine", "MD" -> "Maryland",
+    "MA" -> "Massachusetts", "MI" -> "Michigan", "MN" -> "Minnesota", "MS" -> "Mississippi",
+    "MO" -> "Missouri", "MT" -> "Montana", "NE" -> "Nebraska", "NV" -> "Nevada",
+    "NH" -> "New Hampshire", "NJ" -> "New Jersey", "NM" -> "New Mexico", "NY" -> "New York",
+    "NC" -> "North Carolina", "ND" -> "North Dakota", "OH" -> "Ohio", "OK" -> "Oklahoma",
+    "OR" -> "Oregon", "PA" -> "Pennsylvania", "RI" -> "Rhode Island", "SC" -> "South Carolina",
+    "SD" -> "South Dakota", "TN" -> "Tennessee", "TX" -> "Texas", "UT" -> "Utah",
+    "VT" -> "Vermont", "VA" -> "Virginia", "WA" -> "Washington", "WV" -> "West Virginia",
+    "WI" -> "Wisconsin", "WY" -> "Wyoming", "DC" -> "District of Columbia"
+  )
 
   // Germany: Friedrichstraße 123, 10117 Berlin (or with Bundesland / Germany)
   private val DeRegex =
@@ -61,27 +79,42 @@ final class AddressParser(
   private val UkRegexWithDistrict =
     """^(?:(?:Flat|Floor|Fl|Apt|Suite|Unit|#)\s*([^,]+?),\s*)?([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})(?:,\s*(?:UK|United Kingdom|GB))?$""".r
   private val UkRegexBuildingOnly =
+    """^([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})(?:,\s*(?:UK|United Kingdom|GB))?$""".r
+  private val UkRegexBuildingOnlyNoHouse =
+    """^([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})(?:,\s*(?:UK|United Kingdom|GB))?$""".r
+  private val UkRegexBuildingNameOnly =
     """^([^,]+?),\s*([^,]+?),\s*([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})(?:,\s*(?:UK|United Kingdom|GB))?$""".r
 
   // Japan: 〒150-0002 東京都渋谷区渋谷2-21-1
-  private val JpRegex =
-    """^(?:〒\s*(\d{3}-?\d{4})\s*)?(東京都|大阪府|京都府|北海道|[\p{InCJK_Unified_Ideographs}]{2,4}県)([\p{InCJK_Unified_Ideographs}]{1,8}(?:市|区|郡))([\p{InCJK_Unified_Ideographs}A-Za-zぁ-んァ-ヶ]+?)(\d+(?:-\d+)*)(.*)$""".r
+  // Format: Prefecture (都/道/府/県), City (市), optional Ward (区), Street, HouseNumber
+  // Tokyo: 都 + 区 (wards act as cities); Osaka: 府 + 市 + 区
+  // Use two patterns: one for Tokyo (都 + 区), one for others (府/県 + 市 + optional 区)
+  private val JpRegexTokyo =
+    """^(?:〒\s*(\d{3}-?\d{4})\s*)?(東京都)([\p{IsHan}]{1,8}区)([\p{IsHan}A-Za-zぁ-んァ-ヶ]+?)(\d+(?:-\d+)*)(.*)$""".r
+  private val JpRegexOther =
+    """^(?:〒\s*(\d{3}-?\d{4})\s*)?(大阪府|京都府|北海道|[\p{IsHan}]{2,4}[都道府県])([\p{IsHan}]{1,8}市)(?:([\p{IsHan}]{1,8}区))?([\p{IsHan}A-Za-zぁ-んァ-ヶ]+?)(\d+(?:-\d+)*)(.*)$""".r
+  private val JpRegexOsaka =
+    """^(?:〒\s*(\d{3}-?\d{4})\s*)?(大阪府)([\p{IsHan}]{1,8}市)([\p{IsHan}]{1,8}区)([\p{IsHan}A-Za-zぁ-んァ-ヶ]+?)(\d+(?:-\d+)*)(.*)$""".r
 
   // Italy: Via Roma 42, 20121 Milano
   private val ItRegex =
     """^([^,]+?)\s+(\d+[A-Za-z]?(?:-\d+[A-Za-z]?)?),\s*(\d{5})\s+([^,]+?)(?:,\s*(?:Italy|Italia|IT))?$""".r
 
-  // Indonesia: Jl. Jend. Sudirman Kav. 52-53, Kebayoran Baru, Jakarta Selatan 12190
-  // Also: Jl. MH Thamrin No. 1, Kebon Sirih, Menteng, Jakarta Pusat 10340
-  private val IdRegex =
-    """^(?:Jl\.?\s+|Jalan\s+)([^,]+?(?:\s+(?:Kav\.?|No\.?)\s*[\d\-]+)?),\s*([^,]+?),\s*([^,]+?)\s+(\d{5})(?:,\s*(?:Indonesia|ID))?$""".r
+  // Indonesia: Jl. Jend. Sudirman Kav. 52-53, Kebayoran Baru, Jakarta Selatan 12190 (3 commas)
+  // Also: Jl. MH Thamrin No. 1, Kebon Sirih, Menteng, Jakarta Pusat 10340, Indonesia (4 commas)
+  private val IdRegex3Comma =
+    """^(?:Jl\.?\s+|Jalan\s+)([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+(\d{5})(?:,\s*(?:Indonesia|ID))?$""".r
+  private val IdRegex4Comma =
+    """^(?:Jl\.?\s+|Jalan\s+)([^,]+?),\s*([^,]+?),\s*([^,]+?),\s*(.+?)\s+(\d{5})(?:,\s*(?:Indonesia|ID))?$""".r
+  private val IdRegex4CommaAlt =
+    """^(?:Jl\.?\s+|Jalan\s+)([^,]+?),\s*([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+(\d{5})(?:,\s*(?:Indonesia|ID))?$""".r
 
   // South Korea: 152 Teheran-ro, Gangnam-gu, Seoul 06236 (houseNo-first)
-  // Also: 제주시 중앙로 123, 63122 (street-first, new addressing system)
+  // Also: 제주특별자치도 제주시 중앙로 123, 63122 (street-first with province/city)
   private val KrRegex =
     """^(\d+[A-Za-z]?(?:-\d+)?)\s+([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+(\d{5})(?:,\s*(?:South Korea|Korea|KR))?$""".r
   private val KrRegexStreetFirst =
-    """^([^,]+?)\s+(\d+[A-Za-z]?(?:-\d+)?),\s*([^,]+?)\s+(\d{5})(?:,\s*(?:South Korea|Korea|KR))?$""".r
+    """^[^,]+?\s+([^,]+?)\s+(\d+[A-Za-z]?(?:-\d+)?),\s*(\d{5})(?:,\s*(?:South Korea|Korea|KR))?$""".r
 
   // Spain: Calle de Alcalá 45, 28014 Madrid
   private val EsRegex =
@@ -93,9 +126,9 @@ final class AddressParser(
 
   // Brazil: Rua Augusta 1500, 01305-100 São Paulo
   // Also: Av. Paulista, 1000 - 10º andar, Bela Vista, São Paulo - SP, 01310-100
-  // Note: º (U+00BA) is a Unicode letter, so [^\p{L}] doesn't match it. Use [^a-zA-Z] instead.
+  // Note: º (U+00BA) and ° (U+00B0) are ordinal/degree signs; match any chars between floor number and 'andar'
   private val BrRegex =
-    """^([^,]+?)\s+(\d+[A-Za-z]?(?:-\d+[A-Za-z]?)?)\s*-\s*\d+[^a-zA-Z]*(andar|floor),\s*([^,]+?),\s*([^,]+?)\s*-\s*([A-Z]{2}),\s*(\d{5}-?\d{3})(?:,\s*(?:Brazil|Brasil|BR))?$""".r
+    """^([^,]+?),\s*(\d+[A-Za-z]?(?:-\d+[A-Za-z]?)?)\s*-\s*\d+.{0,3}\s*(andar|floor),\s*([^,]+?),\s*([^,]+?)\s*-\s*([A-Z]{2}),\s*(\d{5}-?\d{3})(?:,\s*(?:Brazil|Brasil|BR))?$""".r
   private val BrRegexSimple =
     """^([^,]+?)\s+(\d+[A-Za-z]?(?:-\d+[A-Za-z]?)?),\s*(\d{5}-?\d{3})\s+([^,]+?)(?:,\s*(?:Brazil|Brasil|BR))?$""".r
 
@@ -109,26 +142,31 @@ final class AddressParser(
     """^(?:[^,]+?,\s*){0,5}(\d+)\s+([^,]+?)\s+(?:Road|Street|Rd|St|Ave|Path|Drive|Dr|Lane|Ln|Square|Sq|Crescent|Cres|Close|Cl|Court|Ct|Place|Pl|Terrace|Ter|Mews|Circus|Circ|Bypass)\b[^,]*(?:,\s*[^,]+?){0,2},\s*(?:Hong Kong|Kowloon|New Territories|HK)$""".r
   private val HkRegexSubpremise =
     """^(?:((?:Flat|Floor|Fl|G/F|\d+/F|\d+[A-Z]?/F)(?:\s+[^,]+?)?),\s*)?(?:[^,]+?,\s*)*(\d+)\s+([^,]+?)\s+(?:Road|Street|Rd|St|Ave|Path|Drive|Dr|Lane|Ln|Square|Sq|Crescent|Cres|Close|Cl|Court|Ct|Place|Pl|Terrace|Ter|Mews|Circus|Circ|Bypass)\b[^,]*(?:,\s*[^,]+?){0,2},\s*(?:Hong Kong|Kowloon|New Territories|HK)$""".r
+  private val HkRegexNoHouse =
+    """^(?:[^,]+?,\s*){0,5}([^,]+?)\s+(?:Road|Street|Rd|St|Ave|Path|Drive|Dr|Lane|Ln|Square|Sq|Crescent|Cres|Close|Cl|Court|Ct|Place|Pl|Terrace|Ter|Mews|Circus|Circ|Bypass)\b[^,]*(?:,\s*[^,]+?){0,2},\s*(?:Hong Kong|Kowloon|New Territories|HK)$""".r
 
   // Macau: Avenida de Almeida Ribeiro, n.º 100, Edifício Luso, 5.º andar, Macau
   // Also Chinese: 澳門新口岸填海區孫逸仙大馬路618號澳門財富中心12樓
-  // Note: º (U+00BA) is a Unicode letter, so [^\p{L}] doesn't match it. Use [^a-zA-Z] instead.
+  // Note: º (U+00BA, No) and ° (U+00B0, So) are ordinal/degree signs; Portuguese uses "5.º" with period
+  // Use permissive pattern for ordinal indicator (º, ª, °, ., superscript)
   private val MoRegex =
-    """^([^,]+?),\s*n\.[^\d]*(\d+[A-Za-z]?),\s*([^,]+?),\s*\d+[^a-zA-Z]*(andar|floor|樓),\s*(Macau|澳門)$""".r
+    """^([^,]+?),\s*n[ºª°.]?\s*(\d+[A-Za-z]?),\s*([^,]+?),\s*\d+[ºª°.]?\s*(andar|floor|樓),\s*(Macau|澳門)$""".r
+  private val MoRegexAlt =
+    """^([^,]+?),\s*n[ºª°\.]\s*(\d+[A-Za-z]?),\s*([^,]+?),\s*\d+[ºª°\.]\s*(andar|floor|樓),\s*(Macau|澳門)$""".r
   private val MoRegexChinese =
-    """(澳門)([\p{InCJK_Unified_Ideographs}]+?(?:區|填海區))?([\p{InCJK_Unified_Ideographs}]+?(?:大道|大街|路|街|馬路))(\d+[A-Za-z]?號)([\p{InCJK_Unified_Ideographs}]+?(?:中心|大廈|樓))(\d+[樓層])""".r
+    """(澳門)([\u4E00-\u9FFF]+?(?:區|填海區))?([\u4E00-\u9FFF]+?(?:大道|大街|路|街|馬路))(\d+[A-Za-z]?號)([\u4E00-\u9FFF]+?(?:中心|大廈|樓))(\d+[樓層])""".r
 
   // Taiwan: 100台北市中正區忠孝西路一段4號 (Chinese)
   // Also: No. 168, Sec. 5, Nanjing E. Rd., Songshan Dist., Taipei City 105608, Taiwan
   private val TwRegexChinese =
-    """^(\d{3,5})?([\p{InCJK_Unified_Ideographs}]+?(?:市|縣))([\p{InCJK_Unified_Ideographs}]+?(?:區|鄉|鎮|市))([\p{InCJK_Unified_Ideographs}A-Za-z0-9]+?(?:路|街|大道|大街))(?:一段|二段|三段|四段|五段)?(\d+[A-Za-z]?號)?""".r
+    """^(\d{3,5})?([\u4E00-\u9FFF]+?(?:市|縣))([\u4E00-\u9FFF]+?(?:區|鄉|鎮|市))([\u4E00-\u9FFFA-Za-z0-9]+?(?:路|街|大道|大街))(一段|二段|三段|四段|五段)?(\d+[A-Za-z]?號)?""".r
   private val TwRegexEnglish =
-    """^(?:No\.?\s*(\d+[A-Za-z]?),\s*)?(?:Sec\.?\s*(\d+),\s*)?([^,]+?(?:Rd|Road|St|Street|Ave|Avenue|Blvd|Boulevard)),\s*([^,]+?(?:Dist|District)),\s*([^,]+?(?:City|County)),\s*(\d{5,6})(?:,\s*(?:Taiwan|TW))?$""".r
+    """^(?:No\.?\s*(\d+[A-Za-z]?),\s*)?(?:Sec\.?\s*(\d+),\s*)?([^,]+?(?:Rd\.?|Road|St\.?|Street|Ave\.?|Avenue|Blvd\.?|Boulevard|Dr\.?|Drive|Ln\.?|Lane|E\.|W\.|N\.|S\.)),\s*([^,]+?(?:Dist\.?|District)),\s*([^,]+?(?:City|County)),\s*(\d{5,6})(?:,\s*(?:Taiwan|TW))?$""".r
 
   // Singapore: 1 Raffles Place, #45-01, One Raffles Place, Singapore 048616
   // Also: Blk 123 Ang Mo Kio Ave 3, #01-456, Singapore 560123
   private val SgRegex =
-    """^(?:Blk\s+)?([^,]+?),\s*(?:#(\d+-\d+),\s*)?(?:([^,]+?),\s*)?Singapore\s+(\d{6})$""".r
+    """^(?:Blk\s+(\d+)\s+)?([^,]+?),\s*(?:#(\d+-\d+),\s*)?(?:([^,]+?),\s*)?Singapore\s+(\d{6})$""".r
 
   // Australia: Level 12, 123 Collins Street, Melbourne VIC 3000, Australia
   // Also: 10/45 King Street, Sydney NSW 2000
@@ -170,14 +208,18 @@ final class AddressParser(
   private val BmRegex =
     """^([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+(HM\s*\d{1,2}),\s*Bermuda$""".r
 
-  // Turkey (TR): Levent Mahallesi, Büyükdere Caddesi No: 189, 34394 Şişli/İstanbul, Türkiye
+  // Turkey (TR): Levent Mahallesi, Buyukdere Caddesi No: 189, 34394 Sisli/Istanbul, Turkiye
   private val TrRegex =
-    """^([^,]+?),\s*([^,]+?)\s+No\s*:\s*(\d+[A-Za-z]?),\s*(\d{5})\s+([^/]+)/(?:[^,]+?),\s*(?:Türkiye|Turkey|TR)$""".r
+    """^([^,]+?),\s*([^,]+?)\s+No\s*:\s*(\d+[A-Za-z]?),\s*(\d{5})\s+[^/]+/([^,]+?)(?:,\s*(?:Turkiye|Turkey|TR))?$""".r
+  private val TrRegexAlt =
+    """^([^,]+?),\s*([^,]+?),\s*(\d{5}),\s*([^/]+)/([^,]+?)(?:,\s*(?:Turkiye|Turkey|TR))?$""".r
 
   // India (IN): Flat 3B, 12 MG Road, Brigade Road Junction, Bengaluru, Karnataka 560001
   // Also: A-45, Sector 18, Noida, Uttar Pradesh 201301, India
   private val InRegex =
     """^(?:(?:Flat|Floor|Fl|Unit|Apt)\s*([^,]+?),\s*)?(?:([^,]+?)\s+)?([^,]+?),\s*(?:([^,]+?),\s*)?([^,]+?),\s*([^,]+?)\s+(\d{6})(?:,\s*(?:India|IN))?$""".r
+  private val InRegexSector =
+    """^(?:([^,]+?),\s*)?([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+(\d{6})(?:,\s*(?:India|IN))?$""".r
 
   // UAE (AE): Office 1502, Burj Khalifa, PO Box 12345, Dubai, United Arab Emirates
   private val AeRegex =
@@ -203,6 +245,8 @@ final class AddressParser(
   // Philippines (PH): Unit 1501, Ayala Tower One, Ayala Avenue, Makati City 1226, Philippines
   private val PhRegex =
     """^(?:(?:Unit|Suite|Floor|Fl)\s*([^,]+?),\s*)?([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+(\d{4})(?:,\s*(?:Philippines|PH))?$""".r
+  private val PhRegexCityFirst =
+    """^(?:(?:Unit|Suite|Floor|Fl)\s*([^,]+?),\s*)?([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+(\d{4})(?:,\s*(?:Philippines|PH))?$""".r
 
   // Malaysia (MY): Level 20, Menara Petronas, KLCC, 50088 Kuala Lumpur, Malaysia
   private val MyRegex =
@@ -226,6 +270,8 @@ final class AddressParser(
 
   // Kuwait (KW): Ahmed Al-Jaber Street, Al-Safat, Kuwait City 13001, Kuwait
   private val KwRegex =
+    """^([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+(\d{5})(?:,\s*(?:Kuwait|KW))?$""".r
+  private val KwRegexAlt =
     """^([^,]+?),\s*([^,]+?),\s*([^,]+?)\s+(\d{5})(?:,\s*(?:Kuwait|KW))?$""".r
 
   // Vietnam (VN): Tầng 15, Tòa nhà Bitexco, 2 Hai Bà Trưng, Quận 1, TP. Hồ Chí Minh 700000, Việt Nam
@@ -364,9 +410,10 @@ final class AddressParser(
   private def parseUs(text: String): (ParsedAddress, Double, List[String]) = {
     text match {
       case UsRegex(houseNo, street, sub, city, state, zip) =>
+        val fullState = UsStateMap.getOrElse(state, state)
         val addr = ParsedAddress(
           country       = Some("US"),
-          provinceState = Some(state),
+          provinceState = Some(fullState),
           city          = Some(city.trim),
           district      = None,
           street        = Some(street.trim),
@@ -376,9 +423,10 @@ final class AddressParser(
         )
         (addr, 0.94, Nil)
       case UsRegexPoBox(poBox, city, state, zip) =>
+        val fullState = UsStateMap.getOrElse(state, state)
         val addr = ParsedAddress(
           country       = Some("US"),
-          provinceState = Some(state),
+          provinceState = Some(fullState),
           city          = Some(city.trim),
           district      = None,
           street        = Some(s"PO Box $poBox"),
@@ -434,7 +482,7 @@ final class AddressParser(
           postcode      = Some(postcode.trim.toUpperCase(java.util.Locale.ROOT))
         )
         (addr, 0.94, Nil)
-      case UkRegexBuildingOnly(street, city, postcode) =>
+      case UkRegexBuildingOnly(building, street, city, postcode) =>
         val addr = ParsedAddress(
           country       = Some("GB"),
           provinceState = None,
@@ -442,7 +490,24 @@ final class AddressParser(
           district      = None,
           street        = Some(street.trim),
           houseNumber   = None,
-          postcode      = Some(postcode.trim.toUpperCase(java.util.Locale.ROOT))
+          postcode      = Some(postcode.trim.toUpperCase(java.util.Locale.ROOT)),
+          subpremise    = Some(building.trim)
+        )
+        (addr, 0.88, Nil)
+      case UkRegexBuildingNameOnly(building, street, postcode) =>
+        // Building name only format: "The Old Rectory, Church Lane, York YO1 9AA"
+        // building = "The Old Rectory", street = "Church Lane", postcode = "YO1 9AA"
+        // Need to extract city from postcode lookup or assume it's in the street part
+        // For UK, the city is often the post town which can be looked up from postcode
+        val addr = ParsedAddress(
+          country       = Some("GB"),
+          provinceState = None,
+          city          = None,  // Will be resolved by geo validation from postcode
+          district      = None,
+          street        = Some(street.trim),
+          houseNumber   = None,
+          postcode      = Some(postcode.trim.toUpperCase(java.util.Locale.ROOT)),
+          subpremise    = Some(building.trim)
         )
         (addr, 0.88, Nil)
       case _ =>
@@ -453,12 +518,36 @@ final class AddressParser(
   private def parseJapan(text: String): (ParsedAddress, Double, List[String]) = {
     val compact = text.replaceAll("\\s+", "")
     compact match {
-      case JpRegex(pc, pref, city, street, houseNo, rest) =>
+      case JpRegexTokyo(pc, pref, city, street, houseNo, rest) =>
         val addr = ParsedAddress(
           country       = Some("JP"),
           provinceState = Some(pref),
           city          = Some(city),
           district      = None,
+          street        = Some(street),
+          houseNumber   = Some(houseNo),
+          postcode      = Option(pc),
+          subpremise    = Option(rest).filter(_.nonEmpty)
+        )
+        (addr, 0.91, Nil)
+      case JpRegexOsaka(pc, pref, city, ward, street, houseNo, rest) =>
+        val addr = ParsedAddress(
+          country       = Some("JP"),
+          provinceState = Some(pref),
+          city          = Some(city),
+          district      = Some(ward),
+          street        = Some(street),
+          houseNumber   = Some(houseNo),
+          postcode      = Option(pc),
+          subpremise    = Option(rest).filter(_.nonEmpty)
+        )
+        (addr, 0.91, Nil)
+      case JpRegexOther(pc, pref, city, ward, street, houseNo, rest) =>
+        val addr = ParsedAddress(
+          country       = Some("JP"),
+          provinceState = Some(pref),
+          city          = Some(city),
+          district      = Option(ward).filter(_.nonEmpty),
           street        = Some(street),
           houseNumber   = Some(houseNo),
           postcode      = Option(pc),
@@ -490,19 +579,46 @@ final class AddressParser(
 
   private def parseIndonesia(text: String): (ParsedAddress, Double, List[String]) = {
     text match {
-      case IdRegex(street, district, city, postcode) =>
+      case IdRegex4Comma(street, district, subdistrict, city, postcode) =>
+        val houseNoOpt = """(?:Kav\.?|No\.?)\s*([\d\-]+)""".r.findFirstMatchIn(street).map(_.group(1))
         val addr = ParsedAddress(
           country       = Some("ID"),
           provinceState = None,
           city          = Some(city.trim),
           district      = Some(district.trim),
           street        = Some(street.trim),
-          houseNumber   = None,
+          houseNumber   = houseNoOpt,
+          postcode      = Some(postcode.trim),
+          subpremise    = Some(subdistrict.trim)
+        )
+        (addr, 0.90, Nil)
+      case IdRegex4CommaAlt(street, district, subdistrict, city, postcode) =>
+        val houseNoOpt = """(?:Kav\.?|No\.?)\s*([\d\-]+)""".r.findFirstMatchIn(street).map(_.group(1))
+        val addr = ParsedAddress(
+          country       = Some("ID"),
+          provinceState = None,
+          city          = Some(city.trim),
+          district      = Some(district.trim),
+          street        = Some(street.trim),
+          houseNumber   = houseNoOpt,
+          postcode      = Some(postcode.trim),
+          subpremise    = Some(subdistrict.trim)
+        )
+        (addr, 0.90, Nil)
+      case IdRegex3Comma(street, district, city, postcode) =>
+        val houseNoOpt = """(?:Kav\.?|No\.?)\s*([\d\-]+)""".r.findFirstMatchIn(street).map(_.group(1))
+        val addr = ParsedAddress(
+          country       = Some("ID"),
+          provinceState = None,
+          city          = Some(city.trim),
+          district      = Some(district.trim),
+          street        = Some(street.trim),
+          houseNumber   = houseNoOpt,
           postcode      = Some(postcode.trim)
         )
         (addr, 0.90, Nil)
       case _ =>
-        (ParsedAddress(Some("ID"), None, None, None, None, None, None), 0.35, List("Indonesian address did not match Jl. street, district, city postcode pattern"))
+        (ParsedAddress(Some("ID"), None, None, None, None, None, None), 0.35, List("Indonesian address did not match Jl. street, district, [subdistrict,] city postcode pattern"))
     }
   }
 
@@ -519,13 +635,15 @@ final class AddressParser(
           postcode      = Some(postcode.trim)
         )
         (addr, 0.90, Nil)
-      case KrRegexStreetFirst(street, houseNo, city, postcode) =>
+      case KrRegexStreetFirst(city, houseNo, postcode) =>
+        val streetMatch = """^.+?\s+([^,]+?)\s+\d+[A-Za-z]?(?:-\d+)?,?""".r.findFirstMatchIn(text)
+        val streetOpt = streetMatch.map(_.group(1).trim)
         val addr = ParsedAddress(
           country       = Some("KR"),
           provinceState = None,
           city          = Some(city.trim),
           district      = None,
-          street        = Some(street.trim),
+          street        = streetOpt,
           houseNumber   = Some(houseNo.trim),
           postcode      = Some(postcode.trim)
         )
@@ -626,6 +744,17 @@ final class AddressParser(
           postcode      = None
         )
         (addr, 0.85, Nil)
+      case HkRegexNoHouse(street) =>
+        val addr = ParsedAddress(
+          country       = Some("HK"),
+          provinceState = None,
+          city          = Some("Hong Kong"),
+          district      = None,
+          street        = Some(street.trim),
+          houseNumber   = None,
+          postcode      = None
+        )
+        (addr, 0.80, Nil)
       case _ =>
         (ParsedAddress(Some("HK"), None, None, None, None, None, None), 0.35, List("Hong Kong address did not match standard format"))
     }
@@ -634,6 +763,18 @@ final class AddressParser(
   private def parseMacau(text: String): (ParsedAddress, Double, List[String]) = {
     text match {
       case MoRegex(street, houseNo, building, floor, _) =>
+        val addr = ParsedAddress(
+          country       = Some("MO"),
+          provinceState = None,
+          city          = Some("Macau"),
+          district      = None,
+          street        = Some(street.trim),
+          houseNumber   = Some(houseNo.trim),
+          postcode      = None,
+          subpremise    = Some(s"$building, $floor")
+        )
+        (addr, 0.88, Nil)
+      case MoRegexAlt(street, houseNo, building, floor, _) =>
         val addr = ParsedAddress(
           country       = Some("MO"),
           provinceState = None,
@@ -658,7 +799,24 @@ final class AddressParser(
         )
         (addr, 0.88, Nil)
       case _ =>
-        (ParsedAddress(Some("MO"), None, None, None, None, None, None), 0.35, List("Macau address did not match Portuguese or Chinese format"))
+        // Try more permissive matching for Portuguese ordinal indicators
+        val permissiveMo = """^([^,]+?),\s*n[ºª°\.]?\s*(\d+[A-Za-z]?),\s*([^,]+?),\s*\d+[ºª°\.]?\s*(andar|floor|樓),\s*(Macau|澳門)$""".r
+        text match {
+          case permissiveMo(street, houseNo, building, floor, _) =>
+            val addr = ParsedAddress(
+              country       = Some("MO"),
+              provinceState = None,
+              city          = Some("Macau"),
+              district      = None,
+              street        = Some(street.trim),
+              houseNumber   = Some(houseNo.trim),
+              postcode      = None,
+              subpremise    = Some(s"$building, $floor")
+            )
+            (addr, 0.85, Nil)
+          case _ =>
+            (ParsedAddress(Some("MO"), None, None, None, None, None, None), 0.35, List("Macau address did not match Portuguese or Chinese format"))
+        }
     }
   }
 
@@ -687,22 +845,37 @@ final class AddressParser(
         )
         (addr, 0.90, Nil)
       case _ =>
-        (ParsedAddress(Some("TW"), None, None, None, None, None, None), 0.35, List("Taiwan address did not match Chinese or English format"))
+        // Try more permissive matching for directional abbreviations (E., W., N., S.)
+        val permissiveTw = """^(?:No\.?\s*(\d+[A-Za-z]?),\s*)?(?:Sec\.?\s*(\d+),\s*)?([^,]+?(?:Rd\.?|Road|St\.?|Street|Ave\.?|Avenue|Blvd\.?|Boulevard|Dr\.?|Drive|Ln\.?|Lane|E\.|W\.|N\.|S\.)),\s*([^,]+?(?:Dist\.?|District)),\s*([^,]+?(?:City|County)),\s*(\d{5,6})(?:,\s*(?:Taiwan|TW))?$""".r
+        text match {
+          case permissiveTw(houseNo, section, street, district, city, postcode) =>
+            val addr = ParsedAddress(
+              country       = Some("TW"),
+              provinceState = None,
+              city          = Option(city).map(_.trim).filter(_.nonEmpty),
+              district      = Option(district).map(_.trim).filter(_.nonEmpty),
+              street        = Some(street.trim),
+              houseNumber   = Option(houseNo).map(_.trim).filter(_.nonEmpty),
+              postcode      = Some(postcode.trim)
+            )
+            (addr, 0.88, Nil)
+          case _ =>
+            (ParsedAddress(Some("TW"), None, None, None, None, None, None), 0.35, List("Taiwan address did not match Chinese or English format"))
+        }
     }
   }
 
   private def parseSingapore(text: String): (ParsedAddress, Double, List[String]) = {
     text match {
-      case SgRegex(street, unit, building, postcode) =>
-        // Extract house number from street if present (e.g., "Blk 123 Ang Mo Kio Ave 3" -> houseNo="123")
-        val houseNoOpt = """^Blk\s+(\d+)""".r.findFirstMatchIn(street).map(_.group(1))
-        val streetClean = """^Blk\s+\d+\s+""".r.replaceFirstIn(street, "").trim
+      case SgRegex(blkNo, street, unit, building, postcode) =>
+        val houseNoOpt = Option(blkNo).filter(_.nonEmpty)
+        val streetClean = Option(street).map(_.trim).filter(_.nonEmpty)
         val addr = ParsedAddress(
           country       = Some("SG"),
           provinceState = None,
           city          = Some("Singapore"),
           district      = None,
-          street        = Some(streetClean),
+          street        = streetClean,
           houseNumber   = houseNoOpt,
           postcode      = Some(postcode.trim),
           subpremise    = Option(unit).orElse(Option(building)).map(_.trim).filter(_.nonEmpty)
@@ -904,23 +1077,100 @@ final class AddressParser(
           postcode      = Some(postcode.trim)
         )
         (addr, 0.90, Nil)
+      case TrRegexAlt(district, street, postcode, city, country) =>
+        val addr = ParsedAddress(
+          country       = Some("TR"),
+          provinceState = None,
+          city          = Some(city.trim),
+          district      = Some(district.trim),
+          street        = Some(street.trim),
+          houseNumber   = None,
+          postcode      = Some(postcode.trim)
+        )
+        (addr, 0.88, Nil)
       case _ =>
-        (ParsedAddress(Some("TR"), None, None, None, None, None, None), 0.35, List("Turkey address did not match standard format"))
+        // Try more permissive matching for Turkish characters
+        val permissiveTr = """^([^,]+?),\s*([^,]+?)\s+No\s*:\s*(\d+[A-Za-z]?),\s*(\d{5})\s+[^/]+/([^,]+?)(?:,\s*(?:T[üu]rkiye|Turkey|TR))?$""".r
+        text match {
+          case permissiveTr(district, street, houseNo, postcode, city) =>
+            val addr = ParsedAddress(
+              country       = Some("TR"),
+              provinceState = None,
+              city          = Some(city.trim),
+              district      = Some(district.trim),
+              street        = Some(street.trim),
+              houseNumber   = Some(houseNo.trim),
+              postcode      = Some(postcode.trim)
+            )
+            (addr, 0.85, Nil)
+          case _ =>
+            (ParsedAddress(Some("TR"), None, None, None, None, None, None), 0.35, List("Turkey address did not match standard format"))
+        }
     }
   }
+
+  // Indian state name normalization
+  private val InStateMap: Map[String, String] = Map(
+    "Uttar Pradesh" -> "Uttar Pradesh",
+    "Maharashtra" -> "Maharashtra",
+    "Tamil Nadu" -> "Tamil Nadu",
+    "Karnataka" -> "Karnataka",
+    "Gujarat" -> "Gujarat",
+    "West Bengal" -> "West Bengal",
+    "Rajasthan" -> "Rajasthan",
+    "Andhra Pradesh" -> "Andhra Pradesh",
+    "Telangana" -> "Telangana",
+    "Kerala" -> "Kerala",
+    "Madhya Pradesh" -> "Madhya Pradesh",
+    "Punjab" -> "Punjab",
+    "Haryana" -> "Haryana",
+    "Bihar" -> "Bihar",
+    "Odisha" -> "Odisha",
+    "Jharkhand" -> "Jharkhand",
+    "Assam" -> "Assam",
+    "Chhattisgarh" -> "Chhattisgarh",
+    "Uttarakhand" -> "Uttarakhand",
+    "Himachal Pradesh" -> "Himachal Pradesh",
+    "Goa" -> "Goa",
+    "Delhi" -> "Delhi",
+    "Jammu and Kashmir" -> "Jammu and Kashmir",
+    "Ladakh" -> "Ladakh"
+  )
 
   private def parseIndia(text: String): (ParsedAddress, Double, List[String]) = {
     text match {
       case InRegex(sub, houseNo, street, landmark, city, state, postcode) =>
+        val normState = InStateMap.getOrElse(state.trim, state.trim)
+        // Extract house number from either houseNo group or from street (for formats like "A-45, Sector 18")
+        val houseNum = Option(houseNo).filter(_.nonEmpty).orElse {
+          // Try to extract from street if it contains a house number pattern
+          """^([A-Za-z]?\d+[A-Za-z]?(?:[-/]\d+[A-Za-z]?)?)""".r.findFirstMatchIn(street.trim).map(_.group(1))
+        }
         val addr = ParsedAddress(
           country       = Some("IN"),
-          provinceState = Some(state.trim),
+          provinceState = Some(normState),
           city          = Some(city.trim),
           district      = Option(landmark).map(_.trim).filter(_.nonEmpty),
           street        = Some(street.trim),
-          houseNumber   = Option(houseNo).orElse(Option(street).flatMap(s => """\d+[A-Za-z]?""".r.findFirstIn(s))).map(_.trim).filter(_.nonEmpty),
+          houseNumber   = houseNum.map(_.trim).filter(_.nonEmpty),
           postcode      = Some(postcode.trim),
           subpremise    = Option(sub).map(_.trim).filter(_.nonEmpty)
+        )
+        (addr, 0.88, Nil)
+      case InRegexSector(sub, street, landmark, city, state, postcode) =>
+        val normState = InStateMap.getOrElse(state.trim, state.trim)
+        val houseNum = Option(sub).filter(_.nonEmpty).orElse {
+          """^([A-Za-z]?\d+[A-Za-z]?(?:[-/]\d+[A-Za-z]?)?)""".r.findFirstMatchIn(street.trim).map(_.group(1))
+        }
+        val addr = ParsedAddress(
+          country       = Some("IN"),
+          provinceState = Some(normState),
+          city          = Some(city.trim),
+          district      = Option(landmark).map(_.trim).filter(_.nonEmpty),
+          street        = Some(street.trim),
+          houseNumber   = houseNum.map(_.trim).filter(_.nonEmpty),
+          postcode      = Some(postcode.trim),
+          subpremise    = None
         )
         (addr, 0.88, Nil)
       case _ =>
