@@ -517,3 +517,7 @@ Final verified results:
 - Reviewer spot checks (11 synthetic cases for xuri's scenarios) all pass: America Coffee→US, Japan Store→NZ, New Mexico→US, CJK-beginning CN address→CN, Bank of China→HK, New South Wales→AU, Benin City→NG, Panama City FL→US, Maroc end→MA, Deutschland end→DE, Canada Square→GB.
 
 Remaining known issues: COMP-36 (Hang Seng — the Indian place "Bānk" hit still tips it), COMP-53 (bare "Google LLC" tie), BANK-24 (no prefix, no signal — now an honest abstention), ES group needs address-level samples with real structure words to move.
+
+## §21 HK/TW/MO "…, China" qualifier rule (2026-11-20, user rule; implemented & verified by Muse)
+
+User rule: "Hong Kong, China", "Taiwan, China", "Macao, China" are recorded as Hong Kong / Taiwan / Macao — the trailing China is a qualifier of the region, never evidence for CN. Implemented in CountryDetector's country-name pass: region spans (HK/MO/TW) are collected first; a CN mention is suppressed when it follows a region mention with only separators / "SAR" / "Province of" between (suffix form), or directly abuts it (CJK prefix form 中国香港 / 中國台灣 / 中国澳门); the region mention is promoted to end weight (9.0). Verified by Muse: 9/9 targeted probes pass (incl. "Hong Kong SAR, China", "Taiwan, Province of China", CJK prefix forms; mainland CN and US controls unaffected). WebTest 368/387 with the identical 19-failure set; standalone detection unchanged at 264/387 (68.2%) — the benchmark contains no ", China"-suffixed cases, so this fix targets real-world forms and adds no benchmark gain; HardCase exit 0.

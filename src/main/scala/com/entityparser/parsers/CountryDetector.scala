@@ -508,6 +508,47 @@ object CountryDetector {
       "wharf", "tower", "towers", "building", "bldg", "bridge", "station",
       "airport", "harbor", "harbour", "bay", "beach", "island", "islands",
       "city", "town", "village", "creek", "river", "lake", "mount", "fort")
+    // "Hong Kong, China" / "Taiwan, China" / "Macao, China" and the CJK forms
+    // 中国香港 / 中國台灣 / 中国澳门: here the China mention is a qualifier OF
+    // the region, not evidence for CN (user rule, 2026-11-20: these strings are
+    // recorded as Hong Kong / Taiwan / Macao). Suppress such CN mentions and
+    // promote the region mention to end weight - the region phrase is the real
+    // trailing country component.
+    def findNameSpans(name: String): List[(Int, Int)] = {
+      if (name.exists(_ > 'ɏ')) {
+        val idx = s.indexOf(name)
+        if (idx >= 0) List((idx, idx + name.length)) else Nil
+      } else {
+        val pat = ("(?i)(?<![A-Za-zÀ-ÿ])" + java.util.regex.Pattern.quote(name) + "(?![A-Za-zÀ-ÿ])").r
+        pat.findAllMatchIn(s).map(m => (m.start, m.end)).toList
+      }
+    }
+    val regionSpans: List[(Int, Int)] =
+      List("HK", "MO", "TW").flatMap { cc =>
+        CountryNameTable.find(_._1 == cc).get._2.flatMap(findNameSpans)
+      }
+    val cnSpans: List[(Int, Int)] =
+      CountryNameTable.find(_._1 == "CN").get._2.flatMap(findNameSpans)
+    val suppressedCnStarts     = scala.collection.mutable.Set[Int]()
+    val promotedRegionStarts   = scala.collection.mutable.Set[Int]()
+    cnSpans.foreach { case (cms, cme) =>
+      regionSpans.foreach { case (rs, re) =>
+        if (re <= cms) {
+          // Suffix form "<Region>, China": only separators, "SAR" or
+          // "Province of" may stand between the region and the China mention.
+          val between = s.substring(re, cms).toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z]", "")
+          if (between.isEmpty || between == "sar" || between == "provinceof") {
+            suppressedCnStarts += cms
+            promotedRegionStarts += rs
+          }
+        }
+        // CJK prefix form "中国<Region>": CN match directly adjacent before it.
+        if (cme == rs) {
+          suppressedCnStarts += cms
+          promotedRegionStarts += rs
+        }
+      }
+    }
     val bestMention = scala.collection.mutable.Map[String, (String, String, Double)]()
     CountryNameTable.foreach { case (cc, names) =>
       names.foreach { name =>
@@ -526,7 +567,10 @@ object CountryDetector {
               pat.findFirstMatchIn(s).map(m => (m.start, m.end))
             }
           mOpt.foreach { case (ms, me) =>
-            val pos = mentionPosition(ms, me)
+            val pos =
+              if (cc == "CN" && suppressedCnStarts.contains(ms)) "suppressed"
+              else if (promotedRegionStarts.contains(ms)) "end"
+              else mentionPosition(ms, me)
             val nextTok = s.substring(me).trim.toLowerCase(java.util.Locale.ROOT)
               .split("[^\\p{L}]+").filter(_.nonEmpty).headOption.getOrElse("")
             // A country name immediately followed by a place-type noun is a
@@ -535,7 +579,7 @@ object CountryDetector {
             // Followed by a commercial noun it is a brand fragment
             // ("America Coffee", "Japan Store") - except at the very end.
             val brandLike = pos != "end" && !isNonLatin && brandNouns.contains(nextTok)
-            if (!placeLike && !brandLike) {
+            if (pos != "suppressed" && !placeLike && !brandLike) {
               val w = pos match {
                 case "end"       => 9.0
                 case "beginning" => if (hasEastAsianText) 9.0 else 2.0
